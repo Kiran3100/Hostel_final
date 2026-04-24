@@ -289,7 +289,6 @@ test_output/
 # ============================================
 
 # Ignore all .txt files in root (except README)
-/*.txt
 !/README.txt
 !/README.md
 
