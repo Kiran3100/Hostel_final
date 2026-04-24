@@ -1,41 +1,40 @@
 # Core Framework
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
 
 # Database
-sqlalchemy==2.0.36
-asyncpg==0.30.0
-alembic==1.14.1
+sqlalchemy==2.0.23
+asyncpg==0.29.0
+alembic==1.12.1
+psycopg2-binary==2.9.9
 
-# Pydantic (use older version that has pre-compiled wheels)
-pydantic==2.8.2
-pydantic-settings==2.5.2
+# Pydantic (use compatible versions that don't require Rust compilation)
+pydantic==2.5.0
+pydantic-settings==2.1.0
+email-validator==2.1.0
 
-# Security
-pyjwt==2.9.0
-bcrypt==4.2.0
-python-multipart==0.0.12
+# Authentication & Security
+pyjwt==2.8.0
+bcrypt==4.1.0
+python-multipart==0.0.6
 
-# Redis & Celery (optional for Render free tier)
-redis==5.1.1
-celery==5.4.0
+# Task Queue
+celery==5.3.4
+redis==5.0.1
 
-# Email & Validation
-email-validator==2.2.0
-aiosmtplib==3.0.1
+# Email
+aiosmtplib==2.0.1
 
-# AWS (optional)
-boto3==1.35.76
+# Cloud Storage
+boto3==1.34.0
 
-# Razorpay
-razorpay==2.0.1
+# Payments
+razorpay==1.4.0
 
-# HTTP Client (for testing)
-httpx==0.27.2
+# Testing (optional for production)
+pytest==7.4.3
+pytest-asyncio==0.21.1
+httpx==0.25.1
 
-# Production database driver
-psycopg2-binary==2.9.10
-
-# Pytest (development only)
-pytest==8.3.4
-pytest-asyncio==0.24.0
+# Utilities
+python-dotenv==1.0.0
