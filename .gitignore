@@ -1,0 +1,302 @@
+# ============================================
+# Python (Backend)
+# ============================================
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+.eggs/
+parts/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+__pycache__/
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.env/
+.venv/
+virtualenv/
+
+# Python installed packages
+pip-log.txt
+pip-delete-this-directory.txt
+pip-selfcheck.json
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+test_results/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# ============================================
+# IDE / Editor Files
+# ============================================
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+.history/
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+.~*
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+
+# ============================================
+# Database Files
+# ============================================
+
+*.db
+*.sqlite
+*.sqlite3
+*.mdb
+*.accdb
+
+# PostgreSQL dumps
+*.dump
+*.sql
+
+# ============================================
+# Environment & Secrets
+# ============================================
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+.env.staging
+.env.test
+
+# Secrets
+*.pem
+*.key
+*.crt
+*.p12
+secrets/
+config/secrets/
+*.secret
+
+# ============================================
+# Logs & Temporary Files
+# ============================================
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.dll
+*.exe
+
+# ============================================
+# Alembic (keep migrations but ignore cache)
+# ============================================
+
+alembic/versions/*.pyc
+alembic/__pycache__/
+*.pyc
+
+# ============================================
+# Celery
+# ============================================
+
+celerybeat-schedule
+celerybeat.pid
+*.pid
+*.pidlock
+
+# ============================================
+# Redis
+# ============================================
+
+dump.rdb
+*.rdb
+
+# ============================================
+# Docker
+# ============================================
+
+*.pid
+docker-compose.override.yml
+.dockerignore
+
+# ============================================
+# AWS / Cloud
+# ============================================
+
+.aws/
+*.pem
+
+# ============================================
+# Node / Frontend (if applicable)
+# ============================================
+
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Build outputs
+dist/
+dist-ssr/
+*.local
+build/
+out/
+.next/
+.nuxt/
+
+# Testing
+coverage/
+.nyc_output/
+.cypress/
+cypress/videos/
+cypress/screenshots/
+
+# Environment variables (frontend)
+.env
+.env.local
+.env.*.local
+
+# ============================================
+# Application Specific
+# ============================================
+
+# Uploads / Media files
+media/
+uploads/
+static/uploads/
+static/media/
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+*.mp4
+*.pdf
+*.doc
+*.docx
+
+# Reports / Exports
+reports/
+exports/
+*.xlsx
+*.csv
+*.pdf
+
+# Cache
+.cache/
+.cache_*
+*.cache
+
+# ============================================
+# Backup files
+# ============================================
+
+*.backup
+*.old
+*.orig
+*.rej
+
+# ============================================
+# Script output files
+# ============================================
+
+scripts/*.pyc
+scripts/__pycache__/
+test_output/
+*.out
+
+# ============================================
+# Miscellaneous
+# ============================================
+
+# Ignore all .txt files in root (except README)
+/*.txt
+!/README.txt
+!/README.md
+
+# Ignore Vite/HMR files
+*.hot-update.js
+*.hot-update.json
+
+# Python profiling
+*.prof
+*.lprof
