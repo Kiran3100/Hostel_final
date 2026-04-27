@@ -1,8 +1,8 @@
 from functools import lru_cache
-from typing import Optional
+from typing import List, Optional
+import re
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -61,18 +61,18 @@ class Settings(BaseSettings):
     aws_storage_bucket_name: str = Field(default="stayease-uploads", description="S3 bucket name")
     aws_region: str = Field(default="ap-south-1", description="AWS region")
 
-    @field_validator("debug", mode="before")
+    @field_validator("database_url", mode="before")
     @classmethod
-    def parse_debug_value(cls, value: object) -> bool:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            normalized = value.strip().lower()
-            if normalized in {"1", "true", "yes", "on", "debug", "development"}:
-                return True
-            if normalized in {"0", "false", "no", "off", "release", "production"}:
-                return False
-        return bool(value)
+    def clean_database_url(cls, v: str) -> str:
+        """Remove any SSL parameters from URL - they're handled via connect_args"""
+        if v:
+            # Remove any sslmode or ssl parameters
+            v = re.sub(r'\?sslmode=[^&]+', '', v)
+            v = re.sub(r'&sslmode=[^&]+', '', v)
+            v = re.sub(r'\?ssl=[^&]+', '', v)
+            v = re.sub(r'&ssl=[^&]+', '', v)
+            v = re.sub(r'[?&]$', '', v)
+        return v
     
     @field_validator("database_url", mode="after")
     @classmethod
