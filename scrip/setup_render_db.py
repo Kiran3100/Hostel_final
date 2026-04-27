@@ -54,7 +54,7 @@ def print_section(title):
 
 
 # Render Database Configuration
-RENDER_DATABASE_URL = "postgresql://stayease_db_0hw4_user:OLTv0s0MZ4ff88BYqohgiceUJITTSnUgG@dpg-d7kaci4m0tmc73aeivm0-a.oregon-postgres.render.com/stayease_db_0hw4?sslmode=require"
+RENDER_DATABASE_URL = "postgresql://stayease_db_0hw4_user:OLTv0s0MZ4ff88BYqohgiceUJITTSnUgG@dpg-d7kaci4m0tmc73aeivm0-a.oregon-postgres.render.com/stayease_db_0hw4"
 
 
 def update_env_file():

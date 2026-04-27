@@ -27,7 +27,7 @@ RENDER_USER = "stayease_db_0hw4_user"
 RENDER_PORT = 5432
 
 # Connection URL with SSL (REQUIRED for Render)
-RENDER_DATABASE_URL = f"postgresql://{RENDER_USER}:{RENDER_PASSWORD}@{RENDER_HOST}:{RENDER_PORT}/{RENDER_DATABASE}?sslmode=require"
+RENDER_DATABASE_URL = f"postgresql://{RENDER_USER}:{RENDER_PASSWORD}@{RENDER_HOST}:{RENDER_PORT}/{RENDER_DATABASE}"
 
 # Alternative connection config for asyncpg
 RENDER_CONFIG = {
