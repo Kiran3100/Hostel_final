@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     
     # Database configuration with Render support
     database_url: str = Field(
-        default="postgresql://stayease_db_0hw4_user:0L7DvsoMZ4ff88BYqohgiceUJITTSmJG@dpg-d7kaci4m0tmc73aeivm0-a.oregon-postgres.render.com/stayease_db_0hw4"
+        default="postgresql+asyncpg://stayease_db_0hw4_user:0L7DvsoMZ4ff88BYqohgiceUJITTSmJG@dpg-d7kaci4m0tmc73aeivm0-a.oregon-postgres.render.com:5432/stayease_db_0hw4?ssl=require"
     )
 
     
