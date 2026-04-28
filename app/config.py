@@ -32,7 +32,12 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
     refresh_token_expire_days: int = 30
-    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:5174", "http://localhost:3000"]
+    cors_origins: list[str] = [
+        "http://localhost:5173",
+        "http://localhost:5174", 
+        "http://localhost:3000",
+        "https://hostelproject-eta.vercel.app",
+    ]
 
     # httpOnly refresh cookie settings
     refresh_cookie_name: str = "refresh_token"
