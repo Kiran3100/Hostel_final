@@ -2,6 +2,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.openapi.utils import get_openapi
+from fastapi import Request, status
+from pydantic import ValidationError as PydanticValidationError
 
 from app.api.v1.router import api_router
 from app.config import get_settings
@@ -363,10 +365,35 @@ async def http_exception_handler(request, exc: HTTPException):
 
 
 @app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request, exc: RequestValidationError):
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Handle Pydantic validation errors and return 422."""
+    errors = []
+    for error in exc.errors():
+        field = ".".join(str(loc) for loc in error["loc"])
+        errors.append({
+            "field": field,
+            "message": error["msg"],
+            "type": error["type"]
+        })
+    
     return JSONResponse(
-        status_code=422,
-        content={"detail": exc.errors(), "code": "validation_error"},
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "detail": "Validation error",
+            "code": "validation_error",
+            "errors": errors
+        }
+    )
+
+@app.exception_handler(PydanticValidationError)
+async def pydantic_validation_exception_handler(request: Request, exc: PydanticValidationError):
+    """Handle Pydantic validation errors."""
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "detail": str(exc),
+            "code": "validation_error"
+        }
     )
 
 

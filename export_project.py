@@ -1,7 +1,7 @@
 import os
 
 # ✅ 🔴 PASTE YOUR PROJECT PATH HERE
-PROJECT_PATH = r"D:\GIT HUB\hostel-management-api\app"
+PROJECT_PATH = r"D:\GIT HUB\hostel-management-api"
 # For Mac/Linux:
 # PROJECT_PATH = "/home/user/projects/myproject"
 

@@ -116,9 +116,33 @@ class SuperAdminService:
         return await self.repository.list_admins()
 
     async def create_admin(self, payload: SuperAdminAdminCreateRequest):
+        """Create a new hostel admin with validation"""
+        from sqlalchemy import select
+        
+        # Check if email already exists
+        existing_email = await self.session.execute(
+            select(User).where(User.email == payload.email)
+        )
+        if existing_email.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Email '{payload.email}' is already registered."
+            )
+        
+        # Check if phone already exists
+        existing_phone = await self.session.execute(
+            select(User).where(User.phone == payload.phone)
+        )
+        if existing_phone.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Phone number '{payload.phone}' is already registered."
+            )
+        
+        # Create the admin user
         admin = User(
             email=payload.email,
-            phone=payload.phone,
+            phone=payload.phone,  # Already cleaned in validation
             full_name=payload.full_name,
             password_hash=hash_password(payload.password),
             role=UserRole.HOSTEL_ADMIN,
@@ -126,16 +150,62 @@ class SuperAdminService:
             is_email_verified=True,
             is_phone_verified=True,
         )
+        
         admin = await self.repository.create_admin(admin)
         await self.session.commit()
         await self.session.refresh(admin)
         return admin
-
+        
     async def assign_hostels(self, actor_id: str, admin_id: str, payload: AssignHostelsRequest):
+        """Assign hostels to an admin - replaces existing assignments."""
         admin = await self.repository.get_admin_by_id(admin_id)
         if admin is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Admin not found.")
-        await self.repository.replace_admin_hostels(admin_id=admin_id, hostel_ids=payload.hostel_ids, assigned_by=actor_id)
+        
+        # NEW: Validate that all hostel IDs exist and are active
+        from app.models.hostel import Hostel, HostelStatus
+        for hostel_id in payload.hostel_ids:
+            hostel_result = await self.session.execute(
+                select(Hostel).where(Hostel.id == hostel_id)
+            )
+            hostel = hostel_result.scalar_one_or_none()
+            if not hostel:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Hostel with id '{hostel_id}' not found."
+                )
+            if hostel.status != HostelStatus.ACTIVE:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Hostel '{hostel.name}' is not active (status: {hostel.status.value}). Only active hostels can be assigned."
+                )
+        
+        # NEW: Check if this admin email is already assigned to any of these hostels by another admin
+        # This prevents the same email from being assigned by different super admins
+        admin_email = admin.email
+        for hostel_id in payload.hostel_ids:
+            # Check if any OTHER admin with same email is already assigned to this hostel
+            other_admin_result = await self.session.execute(
+                select(User)
+                .join(AdminHostelMapping, AdminHostelMapping.admin_id == User.id)
+                .where(
+                    User.email == admin_email,
+                    User.id != admin_id,
+                    AdminHostelMapping.hostel_id == hostel_id
+                )
+            )
+            if other_admin_result.scalar_one_or_none():
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Admin with email '{admin_email}' is already assigned to hostel '{hostel_id}' (different admin ID)."
+                )
+        
+        # Replace existing mappings
+        await self.repository.replace_admin_hostels(
+            admin_id=admin_id, 
+            hostel_ids=payload.hostel_ids, 
+            assigned_by=actor_id
+        )
         await self.session.commit()
         return {"admin_id": admin_id, "hostel_ids": payload.hostel_ids}
 

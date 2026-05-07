@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 class HostelType(str, enum.Enum):
     BOYS = "boys"
     GIRLS = "girls"
-    COED = "coed"
+    COED = "co-living"
 
 
 class HostelStatus(str, enum.Enum):

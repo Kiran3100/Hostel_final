@@ -118,7 +118,7 @@ HOSTELS_CONFIG = [
         "slug": "green-valley-boys-hostel",
         "city": "Hyderabad",
         "state": "Telangana",
-        "hostel_type": "boys",
+        "hostel_type": "BOYS",
         "description": (
             "Green Valley Boys Hostel is a premium accommodation for male students and "
             "working professionals in the heart of Hyderabad. Surrounded by lush greenery, "
@@ -151,14 +151,14 @@ HOSTELS_CONFIG = [
             ("RO Water", "utilities"), ("Housekeeping", "services"),
         ],
         "rooms": [
-            {"number": "101", "floor": 1, "type": "single", "beds": 1, "daily": 900, "monthly": 8500, "deposit": 8500, "dim": "12x10 ft"},
-            {"number": "102", "floor": 1, "type": "double", "beds": 2, "daily": 700, "monthly": 6500, "deposit": 6500, "dim": "14x12 ft"},
-            {"number": "103", "floor": 1, "type": "double", "beds": 2, "daily": 700, "monthly": 6500, "deposit": 6500, "dim": "14x12 ft"},
-            {"number": "201", "floor": 2, "type": "triple", "beds": 3, "daily": 600, "monthly": 5500, "deposit": 5500, "dim": "16x14 ft"},
-            {"number": "202", "floor": 2, "type": "triple", "beds": 3, "daily": 600, "monthly": 5500, "deposit": 5500, "dim": "16x14 ft"},
-            {"number": "203", "floor": 2, "type": "dormitory", "beds": 6, "daily": 400, "monthly": 3500, "deposit": 3500, "dim": "20x18 ft"},
-            {"number": "301", "floor": 3, "type": "single", "beds": 1, "daily": 950, "monthly": 9000, "deposit": 9000, "dim": "12x10 ft"},
-            {"number": "302", "floor": 3, "type": "double", "beds": 2, "daily": 750, "monthly": 7000, "deposit": 7000, "dim": "14x12 ft"},
+            {"number": "101", "floor": 1, "type": "SINGLE", "beds": 1, "daily": 900, "monthly": 8500, "deposit": 8500, "dim": "12x10 ft"},
+            {"number": "102", "floor": 1, "type": "DOUBLE", "beds": 2, "daily": 700, "monthly": 6500, "deposit": 6500, "dim": "14x12 ft"},
+            {"number": "103", "floor": 1, "type": "DOUBLE", "beds": 2, "daily": 700, "monthly": 6500, "deposit": 6500, "dim": "14x12 ft"},
+            {"number": "201", "floor": 2, "type": "TRIPLE", "beds": 3, "daily": 600, "monthly": 5500, "deposit": 5500, "dim": "16x14 ft"},
+            {"number": "202", "floor": 2, "type": "TRIPLE", "beds": 3, "daily": 600, "monthly": 5500, "deposit": 5500, "dim": "16x14 ft"},
+            {"number": "203", "floor": 2, "type": "DORMITORY", "beds": 6, "daily": 400, "monthly": 3500, "deposit": 3500, "dim": "20x18 ft"},
+            {"number": "301", "floor": 3, "type": "SINGLE", "beds": 1, "daily": 950, "monthly": 9000, "deposit": 9000, "dim": "12x10 ft"},
+            {"number": "302", "floor": 3, "type": "DOUBLE", "beds": 2, "daily": 750, "monthly": 7000, "deposit": 7000, "dim": "14x12 ft"},
         ],
     },
     {
@@ -166,7 +166,7 @@ HOSTELS_CONFIG = [
         "slug": "pearl-girls-hostel",
         "city": "Bangalore",
         "state": "Karnataka",
-        "hostel_type": "girls",
+        "hostel_type": "GIRLS",
         "description": (
             "Pearl Girls Hostel is a safe, comfortable, and well-managed accommodation "
             "exclusively for women in Bangalore. Located in Koramangala, we are minutes "
@@ -199,13 +199,13 @@ HOSTELS_CONFIG = [
             ("Housekeeping", "services"), ("Wardrobe", "furniture"),
         ],
         "rooms": [
-            {"number": "A101", "floor": 1, "type": "single", "beds": 1, "daily": 1000, "monthly": 9500, "deposit": 9500, "dim": "12x10 ft"},
-            {"number": "A102", "floor": 1, "type": "double", "beds": 2, "daily": 800, "monthly": 7500, "deposit": 7500, "dim": "14x12 ft"},
-            {"number": "A103", "floor": 1, "type": "double", "beds": 2, "daily": 800, "monthly": 7500, "deposit": 7500, "dim": "14x12 ft"},
-            {"number": "B201", "floor": 2, "type": "triple", "beds": 3, "daily": 650, "monthly": 6000, "deposit": 6000, "dim": "16x14 ft"},
-            {"number": "B202", "floor": 2, "type": "triple", "beds": 3, "daily": 650, "monthly": 6000, "deposit": 6000, "dim": "16x14 ft"},
-            {"number": "C301", "floor": 3, "type": "single", "beds": 1, "daily": 1050, "monthly": 10000, "deposit": 10000, "dim": "12x10 ft"},
-            {"number": "C302", "floor": 3, "type": "dormitory", "beds": 4, "daily": 450, "monthly": 4000, "deposit": 4000, "dim": "18x16 ft"},
+            {"number": "A101", "floor": 1, "type": "SINGLE", "beds": 1, "daily": 1000, "monthly": 9500, "deposit": 9500, "dim": "12x10 ft"},
+            {"number": "A102", "floor": 1, "type": "DOUBLE", "beds": 2, "daily": 800, "monthly": 7500, "deposit": 7500, "dim": "14x12 ft"},
+            {"number": "A103", "floor": 1, "type": "DOUBLE", "beds": 2, "daily": 800, "monthly": 7500, "deposit": 7500, "dim": "14x12 ft"},
+            {"number": "B201", "floor": 2, "type": "TRIPLE", "beds": 3, "daily": 650, "monthly": 6000, "deposit": 6000, "dim": "16x14 ft"},
+            {"number": "B202", "floor": 2, "type": "TRIPLE", "beds": 3, "daily": 650, "monthly": 6000, "deposit": 6000, "dim": "16x14 ft"},
+            {"number": "C301", "floor": 3, "type": "SINGLE", "beds": 1, "daily": 1050, "monthly": 10000, "deposit": 10000, "dim": "12x10 ft"},
+            {"number": "C302", "floor": 3, "type": "DORMITORY", "beds": 4, "daily": 450, "monthly": 4000, "deposit": 4000, "dim": "18x16 ft"},
         ],
     },
     {
@@ -213,7 +213,7 @@ HOSTELS_CONFIG = [
         "slug": "sunrise-co-ed-hostel",
         "city": "Pune",
         "state": "Maharashtra",
-        "hostel_type": "coed",
+        "hostel_type": "co-living",
         "description": (
             "Sunrise Co-ed Hostel is a modern, vibrant accommodation for students and "
             "young professionals in Pune. Located in Kothrud, we offer separate floors "
@@ -246,13 +246,13 @@ HOSTELS_CONFIG = [
             ("Cafeteria", "food"), ("Study Hall", "facilities"),
         ],
         "rooms": [
-            {"number": "M101", "floor": 1, "type": "single", "beds": 1, "daily": 850, "monthly": 8000, "deposit": 8000, "dim": "12x10 ft"},
-            {"number": "M102", "floor": 1, "type": "double", "beds": 2, "daily": 650, "monthly": 6000, "deposit": 6000, "dim": "14x12 ft"},
-            {"number": "M201", "floor": 2, "type": "triple", "beds": 3, "daily": 550, "monthly": 5000, "deposit": 5000, "dim": "16x14 ft"},
-            {"number": "M202", "floor": 2, "type": "dormitory", "beds": 6, "daily": 380, "monthly": 3200, "deposit": 3200, "dim": "20x18 ft"},
-            {"number": "F301", "floor": 3, "type": "single", "beds": 1, "daily": 900, "monthly": 8500, "deposit": 8500, "dim": "12x10 ft"},
-            {"number": "F302", "floor": 3, "type": "double", "beds": 2, "daily": 700, "monthly": 6500, "deposit": 6500, "dim": "14x12 ft"},
-            {"number": "F303", "floor": 3, "type": "triple", "beds": 3, "daily": 580, "monthly": 5200, "deposit": 5200, "dim": "16x14 ft"},
+            {"number": "M101", "floor": 1, "type": "SINGLE", "beds": 1, "daily": 850, "monthly": 8000, "deposit": 8000, "dim": "12x10 ft"},
+            {"number": "M102", "floor": 1, "type": "DOUBLE", "beds": 2, "daily": 650, "monthly": 6000, "deposit": 6000, "dim": "14x12 ft"},
+            {"number": "M201", "floor": 2, "type": "TRIPLE", "beds": 3, "daily": 550, "monthly": 5000, "deposit": 5000, "dim": "16x14 ft"},
+            {"number": "M202", "floor": 2, "type": "DORMITORY", "beds": 6, "daily": 380, "monthly": 3200, "deposit": 3200, "dim": "20x18 ft"},
+            {"number": "F301", "floor": 3, "type": "SINGLE", "beds": 1, "daily": 900, "monthly": 8500, "deposit": 8500, "dim": "12x10 ft"},
+            {"number": "F302", "floor": 3, "type": "DOUBLE", "beds": 2, "daily": 700, "monthly": 6500, "deposit": 6500, "dim": "14x12 ft"},
+            {"number": "F303", "floor": 3, "type": "TRIPLE", "beds": 3, "daily": 580, "monthly": 5200, "deposit": 5200, "dim": "16x14 ft"},
         ],
     },
     {
@@ -260,7 +260,7 @@ HOSTELS_CONFIG = [
         "slug": "metro-stay-hostel",
         "city": "Mumbai",
         "state": "Maharashtra",
-        "hostel_type": "coed",
+        "hostel_type": "COED",
         "description": (
             "Metro Stay Hostel is a premium co-ed hostel in the heart of Mumbai, "
             "offering unmatched connectivity and comfort. Located in Andheri West, "
@@ -293,12 +293,12 @@ HOSTELS_CONFIG = [
             ("Elevator", "facilities"), ("Parking", "facilities"),
         ],
         "rooms": [
-            {"number": "101", "floor": 1, "type": "single", "beds": 1, "daily": 1200, "monthly": 12000, "deposit": 12000, "dim": "12x10 ft"},
-            {"number": "102", "floor": 1, "type": "double", "beds": 2, "daily": 950, "monthly": 9000, "deposit": 9000, "dim": "14x12 ft"},
-            {"number": "201", "floor": 2, "type": "single", "beds": 1, "daily": 1300, "monthly": 13000, "deposit": 13000, "dim": "12x10 ft"},
-            {"number": "202", "floor": 2, "type": "double", "beds": 2, "daily": 1000, "monthly": 9500, "deposit": 9500, "dim": "14x12 ft"},
-            {"number": "203", "floor": 2, "type": "triple", "beds": 3, "daily": 800, "monthly": 7500, "deposit": 7500, "dim": "16x14 ft"},
-            {"number": "301", "floor": 3, "type": "dormitory", "beds": 5, "daily": 550, "monthly": 5000, "deposit": 5000, "dim": "20x18 ft"},
+            {"number": "101", "floor": 1, "type": "SINGLE", "beds": 1, "daily": 1200, "monthly": 12000, "deposit": 12000, "dim": "12x10 ft"},
+            {"number": "102", "floor": 1, "type": "DOUBLE", "beds": 2, "daily": 950, "monthly": 9000, "deposit": 9000, "dim": "14x12 ft"},
+            {"number": "201", "floor": 2, "type": "SINGLE", "beds": 1, "daily": 1300, "monthly": 13000, "deposit": 13000, "dim": "12x10 ft"},
+            {"number": "202", "floor": 2, "type": "DOUBLE", "beds": 2, "daily": 1000, "monthly": 9500, "deposit": 9500, "dim": "14x12 ft"},
+            {"number": "203", "floor": 2, "type": "TRIPLE", "beds": 3, "daily": 800, "monthly": 7500, "deposit": 7500, "dim": "16x14 ft"},
+            {"number": "301", "floor": 3, "type": "DORMITORY", "beds": 5, "daily": 550, "monthly": 5000, "deposit": 5000, "dim": "20x18 ft"},
         ],
     },
 ]
@@ -1142,29 +1142,33 @@ async def _run():
     if clean:
         print("\n🗑️  Cleaning existing data (--clean flag)...\n")
         async with engine.begin() as conn:
-            # Disable FK checks temporarily and delete all data
-            await conn.execute(__import__("sqlalchemy").text("SET session_replication_role = replica"))
+            # Delete in reverse dependency order (child tables first)
+            # Use TRUNCATE with CASCADE - doesn't require superuser on most clouds
             tables = [
                 "complaint_comments", "notice_reads", "attendance_records",
-                "maintenance_requests", "complaints", "notices",
-                "mess_menu_items", "mess_menus",
-                "reviews", "inquiries", "subscriptions",
-                "bed_stays", "booking_status_history", "payments",
-                "payment_webhook_events", "students",
-                "bookings", "beds", "rooms",
-                "hostel_amenities", "hostel_images",
-                "admin_hostel_mappings", "supervisor_hostel_mappings",
-                "visitor_favorites", "waitlist_entries",
-                "hostels", "otp_verifications", "refresh_tokens", "users",
+                "maintenance_requests", "waitlist_entries", "reviews",
+                "inquiries", "payment_webhook_events", "payments",
+                "bed_stays", "booking_status_history", "students",
+                "bookings", "beds", "rooms", "hostel_amenities",
+                "hostel_images", "admin_hostel_mappings", "supervisor_hostel_mappings",
+                "visitor_favorites", "subscriptions", "complaints", "notices",
+                "mess_menu_items", "mess_menus", "hostels",
+                "otp_verifications", "refresh_tokens", "users",
             ]
+            
+            # Try TRUNCATE first (cleaner, often works without superuser)
             for table in tables:
                 try:
-                    await conn.execute(__import__("sqlalchemy").text(f'DELETE FROM "{table}"'))
+                    await conn.execute(__import__("sqlalchemy").text(f'TRUNCATE TABLE "{table}" CASCADE'))
                     print(f"  ✓ Cleared {table}")
                 except Exception as e:
-                    print(f"  ⚠ Skip {table}: {e}")
-            await conn.execute(__import__("sqlalchemy").text("SET session_replication_role = DEFAULT"))
-        print("\n  ✓ All tables cleared\n")
+                    # Fall back to DELETE if TRUNCATE fails
+                    try:
+                        await conn.execute(__import__("sqlalchemy").text(f'DELETE FROM "{table}"'))
+                        print(f"  ✓ Cleared {table} (via DELETE)")
+                    except Exception as e2:
+                        print(f"  ⚠ Could not clear {table}: {e2}")
+        print("\n  ✓ Data clearing complete\n")
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
