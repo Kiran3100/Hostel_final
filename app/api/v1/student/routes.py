@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from starlette.responses import Response
 from sqlalchemy import or_, select
-
+from app.schemas.notice import NoticeResponse, NoticeListResponse  
 from app.dependencies import CurrentUser, DBSession, require_roles
 from app.models.operations import Notice, NoticeRead
 from app.schemas.attendance import AttendanceResponse
@@ -49,6 +49,8 @@ AdminUser = Annotated[CurrentUser, Depends(require_roles("hostel_admin", "super_
 
 # ==================== PROFILE ENDPOINTS ====================
 
+
+
 @router.get("/profile", response_model=StudentProfileResponse)
 async def profile(current_user: StudentUser, db: DBSession):
     """**Student profile** — personal info, hostel, room, bed, booking, and student number."""
@@ -58,6 +60,14 @@ async def profile(current_user: StudentUser, db: DBSession):
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Student profile not found.",
         )
+    
+    if profile_data.get("check_in_date"):
+        profile_data["check_in_date"] = profile_data["check_in_date"].isoformat() if hasattr(profile_data["check_in_date"], "isoformat") else profile_data["check_in_date"]
+    if profile_data.get("check_out_date"):
+        profile_data["check_out_date"] = profile_data["check_out_date"].isoformat() if hasattr(profile_data["check_out_date"], "isoformat") else profile_data["check_out_date"]
+    if profile_data.get("date_of_birth"):
+        profile_data["date_of_birth"] = profile_data["date_of_birth"].isoformat() if hasattr(profile_data["date_of_birth"], "isoformat") else profile_data["date_of_birth"]
+    
     return profile_data
 
 
@@ -91,6 +101,8 @@ async def get_detailed_student_profile(current_user: StudentUser, db: DBSession)
         "email": user.email,
         "phone": user.phone,
         "profile_picture_url": user.profile_picture_url,
+        "gender": booking.gender if booking else None,  # ← ADD THIS
+        "date_of_birth": booking.date_of_birth if booking else None,  # ← ADD THIS
         "hostel": {
             "id": str(hostel.id),
             "name": hostel.name,
@@ -131,7 +143,6 @@ async def get_detailed_student_profile(current_user: StudentUser, db: DBSession)
         "created_at": student.created_at,
         "updated_at": student.updated_at,
     }
-
 
 @router.patch("/profile")
 async def update_profile(payload: "StudentProfileUpdateRequest", current_user: StudentUser, db: DBSession):  # Using string reference
@@ -185,7 +196,7 @@ async def attendance(current_user: StudentUser, db: DBSession):
 
 # ==================== NOTICES ====================
 
-@router.get("/notices/paginated")
+@router.get("/notices/paginated", response_model=NoticeListResponse)
 async def student_notices_paginated(
     current_user: StudentUser,
     db: DBSession,

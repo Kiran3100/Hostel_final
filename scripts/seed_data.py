@@ -546,8 +546,8 @@ class StayEaseSeeder:
         return hostel.id
 
     # ------------------------------------------------------------------
-    async def create_rooms_and_beds(self, hostel_id: str,
-                                    rooms_cfg: list) -> None:
+
+    async def create_rooms_and_beds(self, hostel_id: str, rooms_cfg: list) -> None:
         for r in rooms_cfg:
             room = Room(
                 id=self._uid(), hostel_id=hostel_id,
@@ -563,10 +563,23 @@ class StayEaseSeeder:
             self.rooms[room.id] = {"hostel_id": hostel_id, "room_id": room.id}
 
             for b in range(1, r["beds"] + 1):
+                bed_number = f"B{b}"
+                
+                # Check if bed already exists
+                existing_bed = None
+                for existing in self.beds.values():
+                    if existing.get("room_id") == room.id and existing.get("bed_number") == bed_number:
+                        existing_bed = existing
+                        break
+                
+                if existing_bed:
+                    print(f"    → Bed {bed_number} already exists, skipping")
+                    continue
+                    
                 bed = Bed(
                     id=self._uid(), hostel_id=hostel_id,
                     room_id=room.id,
-                    bed_number=f"B{b}",
+                    bed_number=bed_number,
                     status=BedStatus.AVAILABLE,
                 )
                 self.session.add(bed)
@@ -575,6 +588,7 @@ class StayEaseSeeder:
                     "hostel_id": hostel_id,
                     "room_id": room.id,
                     "bed_id": bed.id,
+                    "bed_number": bed_number,
                 }
 
     # ------------------------------------------------------------------

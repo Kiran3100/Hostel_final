@@ -1,7 +1,7 @@
 # app/schemas/notice.py
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 from app.schemas.base import APIModel
 
 
@@ -45,7 +45,12 @@ class NoticeResponse(APIModel):
     read_count: int = 0
     total_students: int = 0
     is_read: bool = False
-
+    
+    @field_serializer('created_at', 'updated_at', 'publish_at', 'expires_at')
+    def serialize_datetime(self, dt: datetime, _info):
+        if dt is None:
+            return None
+        return dt.isoformat()
 
 class NoticeReadStatsItem(APIModel):
     """Per-notice read counts"""

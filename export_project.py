@@ -1,7 +1,7 @@
 import os
 
 # ✅ 🔴 PASTE YOUR PROJECT PATH HERE
-PROJECT_PATH = r"D:\GIT HUB\hostel-management-api"
+PROJECT_PATH = r"D:\hostel-management-api-2"
 # For Mac/Linux:
 # PROJECT_PATH = "/home/user/projects/myproject"
 
@@ -17,7 +17,7 @@ IGNORE = {
     ".DS_Store"
 }
 
-OUTPUT_FILE = "Frontend_dump.txt"
+OUTPUT_FILE = "backend.txt"
 
 
 def should_ignore(path):

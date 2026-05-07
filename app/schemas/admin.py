@@ -29,6 +29,33 @@ class DirectStudentAddRequest(BaseModel):
     check_in_date: str
     check_out_date: str
     booking_mode: str = "monthly"
+    gender: str | None = Field(default=None, description="M, F, or Other")
+    date_of_birth: str | None = Field(default=None, description="YYYY-MM-DD format")
+    
+    @field_validator("gender", mode="before")
+    @classmethod
+    def validate_gender(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = str(v).strip()
+        if v.upper() in ["M", "MALE"]:
+            return "M"
+        if v.upper() in ["F", "FEMALE"]:
+            return "F"
+        if v.upper() in ["OTHER"]:
+            return "Other"
+        raise ValueError("Gender must be 'M', 'F', or 'Other'")
+    
+    @field_validator("date_of_birth", mode="before")
+    @classmethod
+    def validate_date_of_birth(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        # Basic format validation - actual parsing done in service
+        import re
+        if not re.match(r'^\d{4}-\d{2}-\d{2}$', v):
+            raise ValueError("date_of_birth must be in YYYY-MM-DD format")
+        return v
 
 
 class DirectStudentAddResponse(BaseModel):
@@ -42,6 +69,8 @@ class DirectStudentAddResponse(BaseModel):
     room_id: str
     bed_id: str
     check_in_date: str
+    gender: str | None = None  
+    date_of_birth: str | None = None  
 
     class Config:
         from_attributes = True

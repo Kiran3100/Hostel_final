@@ -1,6 +1,6 @@
 from sqlalchemy import func, select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
-
+from app.core.database import Base
 from app.models.hostel import AdminHostelMapping, Hostel, HostelStatus, HostelType
 from app.models.operations import Subscription
 from app.models.user import User, UserRole

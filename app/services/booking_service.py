@@ -2,6 +2,7 @@
 Booking service — transaction-safe booking lifecycle management.
 All state transitions commit atomically. BedStay is the source of truth for occupancy.
 """
+from datetime import date
 import uuid as _uuid
 
 from fastapi import HTTPException, status
@@ -13,6 +14,8 @@ from app.models.booking import WaitlistEntry, WaitlistStatus
 from app.repositories.booking_repository import BookingRepository
 from app.schemas.booking import BookingCreateRequest
 from app.schemas.booking import BookingInitiateRequest, BookingApplicantPatchRequest, WaitlistJoinRequest
+from app.services.subscription_validator import SubscriptionValidator
+
 
 
 class BookingService:
@@ -31,6 +34,18 @@ class BookingService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="check_out_date must be after check_in_date.",
             )
+        await self.check_hostel_subscription(
+            hostel_id=payload.hostel_id,
+            check_in_date=payload.check_in_date,
+            check_out_date=payload.check_out_date
+        )
+        
+        validator = SubscriptionValidator(self.session)
+        await validator.validate_hostel_subscription(
+            hostel_id=payload.hostel_id,
+            check_in_date=payload.check_in_date,
+            check_out_date=payload.check_out_date
+        )
 
         booking_number = f"SE-{_uuid.uuid4().hex[:10].upper()}"
 
@@ -99,6 +114,17 @@ class BookingService:
         Create booking in DRAFT status with pricing breakdown.
         Bed assignment is optional at this stage, but availability is still validated.
         """
+        await self.check_hostel_subscription(
+            hostel_id=payload.hostel_id,
+            check_in_date=payload.check_in_date,
+            check_out_date=payload.check_out_date
+        )
+        validator = SubscriptionValidator(self.session)
+        await validator.validate_hostel_subscription(
+            hostel_id=payload.hostel_id,
+            check_in_date=payload.check_in_date,
+            check_out_date=payload.check_out_date
+        )
         if payload.bed_id:
             is_available = await self.repository.is_bed_available(
                 bed_id=payload.bed_id,
@@ -526,3 +552,46 @@ class BookingService:
             )
         entry.status = WaitlistStatus.CANCELLED
         await self.session.commit()
+
+    async def check_hostel_subscription(self, hostel_id: str, check_in_date: date, check_out_date: date) -> None:
+        """
+        Check if hostel has an active subscription for the booking dates.
+        Raises HTTPException if no active subscription or booking exceeds subscription.
+        """
+        from app.models.operations import Subscription
+        from datetime import date as date_type
+        
+        # Get active subscription for this hostel
+        result = await self.session.execute(
+            select(Subscription).where(
+                Subscription.hostel_id == hostel_id,
+                Subscription.status == "active",
+                Subscription.start_date <= check_in_date,
+                Subscription.end_date >= check_out_date
+            )
+        )
+        subscription = result.scalar_one_or_none()
+        
+        if not subscription:
+            # Check if there's any active subscription at all (even if dates don't match)
+            any_active = await self.session.execute(
+                select(Subscription).where(
+                    Subscription.hostel_id == hostel_id,
+                    Subscription.status == "active"
+                )
+            )
+            any_active_sub = any_active.scalar_one_or_none()
+            
+            if not any_active_sub:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="This hostel does not have an active subscription. Bookings are not allowed."
+                )
+            else:
+                # Has subscription but dates are outside range
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Booking dates exceed subscription validity. Subscription expires on {subscription.end_date if subscription else 'unknown'}."
+                )
+        
+        return subscription

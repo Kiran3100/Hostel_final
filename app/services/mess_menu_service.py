@@ -49,6 +49,60 @@ def _flatten_menus(menus: list[MessMenu]) -> list[dict]:
             })
     return result
 
+def validate_meal_type(meal_type: str) -> str:
+    """
+    Validate and normalize meal type - strict validation.
+    """
+    if meal_type is None:
+        return None
+    
+    # Handle empty string
+    if meal_type == "":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="meal_type cannot be empty."
+        )
+    
+    # Check if it's a string
+    if not isinstance(meal_type, str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid meal_type. Must be a string. Got: '{meal_type}'"
+        )
+    
+    allowed_meal_types = {"breakfast", "lunch", "snacks", "dinner"}
+    
+    if meal_type not in allowed_meal_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid meal_type. Must be one of: {', '.join(allowed_meal_types)} (lowercase). Got: '{meal_type}'"
+        )
+    
+    return meal_type
+
+def validate_day_of_week(day: str) -> str:
+    """Validate and normalize day of week - returns normalized value or raises 400"""
+    if day is None:
+        return None
+    
+    # Handle empty string
+    if not day or day.strip() == "":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"day_of_week cannot be empty. Must be one of: Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday"
+        )
+    
+    normalized = day.strip().capitalize()
+    valid_days = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"}
+    
+    if normalized not in valid_days:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid day_of_week. Must be one of: {', '.join(valid_days)}. Got: '{day}'"
+        )
+    
+    return normalized
+
 
 class MessMenuService:
     def __init__(self, session: AsyncSession) -> None:
@@ -61,6 +115,10 @@ class MessMenuService:
         return _flatten_menus(menus)
 
     async def create_admin_menu(self, *, actor_id: str, hostel_id: str, payload: MessMenuCreateRequest):
+        # Validate and normalize meal_type and day_of_week
+        meal_type = validate_meal_type(payload.meal_type)
+        day_of_week = validate_day_of_week(payload.day_of_week)
+        
         menu = MessMenu(
             hostel_id=hostel_id,
             week_start_date=payload.week_start_date,
@@ -71,8 +129,8 @@ class MessMenuService:
         item = await self.repository.create_item(
             MessMenuItem(
                 menu_id=str(menu.id),
-                day_of_week=payload.day_of_week,
-                meal_type=payload.meal_type,
+                day_of_week=day_of_week,  # Use normalized value
+                meal_type=meal_type,       # Use normalized value
                 item_name=payload.item_name,
                 is_veg=payload.is_veg,
                 special_note=payload.special_note,
@@ -95,7 +153,7 @@ class MessMenuService:
             "is_veg": item.is_veg,
             "special_note": item.special_note,
         }
-
+    
     async def list_supervisor_menus(self, *, supervisor_id: str):
         hostel_ids = await self.assignments.get_supervisor_hostel_ids(supervisor_id)
         if not hostel_ids:
@@ -135,6 +193,7 @@ class MessMenuService:
         if not menu:
             raise HTTPException(status_code=404, detail="Menu not found.")
         
+        # Check permission
         result = await self.session.execute(
             select(AdminHostelMapping).where(
                 AdminHostelMapping.admin_id == actor_id,
@@ -147,9 +206,27 @@ class MessMenuService:
                 detail=f"No access to hostel {menu.hostel_id}"
             )
         
-        update_data = payload.dict(exclude_unset=True)
-        for field, value in update_data.items():
-            setattr(item, field, value)
+        # Validate fields if provided
+        meal_type = None
+        day_of_week = None
+        
+        if payload.meal_type is not None:
+            meal_type = validate_meal_type(payload.meal_type)
+        
+        if payload.day_of_week is not None:
+            day_of_week = validate_day_of_week(payload.day_of_week)
+        
+        # Update fields
+        if meal_type is not None:
+            item.meal_type = meal_type
+        if day_of_week is not None:
+            item.day_of_week = day_of_week
+        if payload.item_name is not None:
+            item.item_name = payload.item_name
+        if payload.is_veg is not None:
+            item.is_veg = payload.is_veg
+        if payload.special_note is not None:
+            item.special_note = payload.special_note
         
         await self.session.commit()
         await self.session.refresh(item)
@@ -163,7 +240,6 @@ class MessMenuService:
             "is_veg": item.is_veg,
             "special_note": item.special_note,
         }
-
 
     async def delete_menu_item(
         self,

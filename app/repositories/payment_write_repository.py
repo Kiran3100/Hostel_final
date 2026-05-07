@@ -3,7 +3,8 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
+from datetime import UTC, datetime
+from typing import Optional
 from app.models.booking import Booking
 from app.models.payment import Payment, PaymentWebhookEvent
 

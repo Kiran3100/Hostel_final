@@ -1,6 +1,8 @@
+from datetime import date
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
+from sqlalchemy import delete, update
 from app.models.hostel import Hostel, SupervisorHostelMapping
 from app.models.room import Bed, BedStatus
 from app.models.room import Room
@@ -35,40 +37,6 @@ class AdminRepository:
         result = await self.session.execute(select(Bed).where(Bed.id == bed_id))
         return result.scalar_one_or_none()
 
-    async def list_students(self, hostel_id: str) -> list[dict]:
-        from app.models.room import Room, Bed
-        from app.models.booking import Booking
-        result = await self.session.execute(
-            select(
-                Student,
-                User.full_name,
-                User.email,
-                User.phone,
-                User.profile_picture_url,
-                Room.room_number,
-                Bed.bed_number,
-                Booking.full_name,
-            )
-            .join(User, User.id == Student.user_id)
-            .outerjoin(Room, Room.id == Student.room_id)
-            .outerjoin(Bed, Bed.id == Student.bed_id)
-            .outerjoin(Booking, Booking.id == Student.booking_id)
-            .where(Student.hostel_id == hostel_id)
-            .order_by(Student.check_in_date.desc())
-        )
-        rows = result.all()
-        return [
-            self._student_to_dict(
-                s,
-                booking_name or user_name,
-                email,
-                phone,
-                profile_picture_url,
-                room_number,
-                bed_number,
-            )
-            for s, user_name, email, phone, profile_picture_url, room_number, bed_number, booking_name in rows
-        ]
 
     async def get_hostel_by_id(self, hostel_id: str) -> Hostel | None:
         from sqlalchemy.orm import selectinload
@@ -119,42 +87,7 @@ class AdminRepository:
         result = await self.session.execute(select(Student).where(Student.id == student_id))
         return result.scalar_one_or_none()
 
-    async def list_students_by_hostel_ids(self, hostel_ids: list[str]) -> list[dict]:
-        if not hostel_ids:
-            return []
-        from app.models.room import Room, Bed
-        from app.models.booking import Booking
-        result = await self.session.execute(
-            select(
-                Student,
-                User.full_name,
-                User.email,
-                User.phone,
-                User.profile_picture_url,
-                Room.room_number,
-                Bed.bed_number,
-                Booking.full_name,
-            )
-            .join(User, User.id == Student.user_id)
-            .outerjoin(Room, Room.id == Student.room_id)
-            .outerjoin(Bed, Bed.id == Student.bed_id)
-            .outerjoin(Booking, Booking.id == Student.booking_id)
-            .where(Student.hostel_id.in_(hostel_ids))
-            .order_by(Student.check_in_date.desc(), Student.created_at.desc())
-        )
-        rows = result.all()
-        return [
-            self._student_to_dict(
-                s,
-                booking_name or user_name,
-                email,
-                phone,
-                profile_picture_url,
-                room_number,
-                bed_number,
-            )
-            for s, user_name, email, phone, profile_picture_url, room_number, bed_number, booking_name in rows
-        ]
+
 
     async def list_attendance(self, hostel_id: str) -> list[AttendanceRecord]:
         result = await self.session.execute(
@@ -209,6 +142,113 @@ class AdminRepository:
         await self.session.delete(supervisor)
         await self.session.flush()
 
+    async def get_bed_by_room_and_number(self, room_id: str, bed_number: str) -> Bed | None:
+        """Check if a bed with given number already exists in the room."""
+        result = await self.session.execute(
+            select(Bed).where(
+                Bed.room_id == room_id,
+                Bed.bed_number == bed_number
+            )
+        )
+        return result.scalar_one_or_none()
+
+
+    async def list_students(self, hostel_id: str) -> list[dict]:
+        from app.models.room import Room, Bed
+        from app.models.booking import Booking
+        result = await self.session.execute(
+            select(
+                Student,
+                User.full_name,
+                User.email,
+                User.phone,
+                User.profile_picture_url,
+                Room.room_number,
+                Bed.bed_number,
+                Booking.full_name,
+                Booking.gender,
+                Booking.date_of_birth,
+            )
+            .join(User, User.id == Student.user_id)
+            .outerjoin(Room, Room.id == Student.room_id)
+            .outerjoin(Bed, Bed.id == Student.bed_id)
+            .outerjoin(Booking, Booking.id == Student.booking_id)
+            .where(Student.hostel_id == hostel_id)
+            .order_by(Student.check_in_date.desc())
+        )
+        rows = result.all()
+        
+        students_list = []
+        for row in rows:
+            # Unpack the row
+            (s, user_name, email, phone, profile_picture_url, 
+            room_number, bed_number, booking_name, gender, date_of_birth) = row
+            
+            student_dict = self._student_to_dict(
+                s=s,
+                full_name=booking_name or user_name,
+                email=email,
+                phone=phone,
+                profile_picture_url=profile_picture_url,
+                room_number=room_number,
+                bed_number=bed_number,
+                gender=gender,
+                date_of_birth=date_of_birth,
+            )
+            students_list.append(student_dict)
+        
+        return students_list
+
+
+    async def list_students_by_hostel_ids(self, hostel_ids: list[str]) -> list[dict]:
+        if not hostel_ids:
+            return []
+        from app.models.room import Room, Bed
+        from app.models.booking import Booking
+        result = await self.session.execute(
+            select(
+                Student,
+                User.full_name,
+                User.email,
+                User.phone,
+                User.profile_picture_url,
+                Room.room_number,
+                Bed.bed_number,
+                Booking.full_name,
+                Booking.gender,
+                Booking.date_of_birth,
+            )
+            .join(User, User.id == Student.user_id)
+            .outerjoin(Room, Room.id == Student.room_id)
+            .outerjoin(Bed, Bed.id == Student.bed_id)
+            .outerjoin(Booking, Booking.id == Student.booking_id)
+            .where(Student.hostel_id.in_(hostel_ids))
+            .order_by(Student.check_in_date.desc(), Student.created_at.desc())
+        )
+        rows = result.all()
+        
+        students_list = []
+        for row in rows:
+            # Unpack the row
+            (s, user_name, email, phone, profile_picture_url, 
+            room_number, bed_number, booking_name, gender, date_of_birth) = row
+            
+            student_dict = self._student_to_dict(
+                s=s,
+                full_name=booking_name or user_name,
+                email=email,
+                phone=phone,
+                profile_picture_url=profile_picture_url,
+                room_number=room_number,
+                bed_number=bed_number,
+                gender=gender,
+                date_of_birth=date_of_birth,
+            )
+            students_list.append(student_dict)
+        
+        return students_list
+
+
     @staticmethod
     def _student_to_dict(
         s: Student,
@@ -218,6 +258,8 @@ class AdminRepository:
         profile_picture_url: str | None = None,
         room_number: str | None = None,
         bed_number: str | None = None,
+        gender: str | None = None,
+        date_of_birth: date | None = None,
     ) -> dict:
         return {
             "id": str(s.id),
@@ -236,6 +278,8 @@ class AdminRepository:
             "profile_picture_url": profile_picture_url,
             "room_number": room_number,
             "bed_number": bed_number,
+            "gender": gender,
+            "date_of_birth": str(date_of_birth) if date_of_birth else None,
             "created_at": s.created_at,
             "updated_at": s.updated_at,
         }

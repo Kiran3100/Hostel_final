@@ -1,5 +1,5 @@
 from typing import Annotated, List
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from app.dependencies import DBSession, CurrentUser, require_roles
 from app.models.booking import Booking
@@ -34,7 +34,7 @@ from app.services.admin_service import AdminService
 from app.schemas.payment import PaymentResponse
 from app.schemas.complaint import ComplaintResponse
 from app.schemas.attendance import AttendanceResponse, AttendanceMonthlySummaryItem
-from app.schemas.maintenance import MaintenanceResponse
+from app.schemas.maintenance import MaintenanceResponse, MaintenanceUpdateRequest
 from app.schemas.notice import NoticeResponse, NoticeReadStatsItem, NoticeCreateRequest
 from app.schemas.mess_menu import MessMenuResponse, MessMenuCreateRequest, MessMenuItemResponse
 from app.schemas.student import StudentResponse, StudentUpdateRequest
@@ -49,10 +49,16 @@ from app.services.mess_menu_service import MessMenuService
 from app.schemas.notice import NoticeCreateRequest, NoticeUpdateRequest, NoticeResponse
 from app.schemas.mess_menu import MessMenuCreateRequest, MessMenuItemUpdateRequest
 from starlette.responses import Response
+from pydantic import ValidationError as PydanticValidationError
+
 
 router = APIRouter()
 AdminUser = Annotated[CurrentUser, Depends(require_roles("hostel_admin"))]
 
+
+def handle_validation_error(e: ValueError) -> None:
+    """Convert Pydantic validation errors to HTTP 400"""
+    raise HTTPException(status_code=400, detail=str(e))
 
 def _check_hostel(current_user: AdminUser, hostel_id: str) -> None:
     if hostel_id not in current_user.hostel_ids:
@@ -181,16 +187,128 @@ async def list_beds(room_id: str, db: DBSession, current_user: AdminUser):
 
 @router.post("/rooms/{room_id}/beds", response_model=BedResponse, status_code=201)
 async def create_bed(room_id: str, payload: BedCreateRequest, db: DBSession, current_user: AdminUser):
+    """Create a new bed in a room"""
     room_hostel_id = await _resolve_room_hostel_id(db, room_id)
     _check_hostel(current_user, room_hostel_id)
-    return await AdminService(db).create_bed(room_id, payload)
-
+    
+    try:
+        return await AdminService(db).create_bed(room_id, payload)
+    except Exception as e:
+        # Check for unique constraint violation
+        error_msg = str(e).lower()
+        if "duplicate key" in error_msg or "uq_bed_room_number" in error_msg:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Bed number '{payload.bed_number}' already exists in this room."
+            )
+        raise
 
 @router.patch("/beds/{bed_id}", response_model=BedResponse)
-async def update_bed(bed_id: str, payload: BedUpdateRequest, db: DBSession, current_user: AdminUser):
-    bed_hostel_id = await _resolve_bed_hostel_id(db, bed_id)
-    _check_hostel(current_user, bed_hostel_id)
-    return await AdminService(db).update_bed(bed_id, payload)
+async def update_bed(
+    bed_id: str, 
+    payload: BedUpdateRequest, 
+    db: DBSession, 
+    current_user: AdminUser
+):
+    """Update bed details (status, bed number)."""
+    from sqlalchemy import slect
+    from sqlalchemy.exc import IntegrityError
+    from app.models.room import Bed, BedStatus
+    
+    # First, get the bed to check permissions
+    result = await db.execute(select(Bed).where(Bed.id == bed_id))
+    bed = result.scalar_one_or_none()
+    
+    if bed is None:
+        raise HTTPException(status_code=404, detail="Bed not found.")
+    
+    # Check hostel access
+    bed_hostel_id = str(bed.hostel_id)
+    if bed_hostel_id not in current_user.hostel_ids:
+        raise HTTPException(status_code=403, detail="Access denied to this bed.")
+    
+    # If changing bed number, check for duplicates
+    if payload.bed_number and payload.bed_number != bed.bed_number:
+        # Check if new bed number already exists in same room
+        existing = await db.execute(
+            select(Bed).where(
+                Bed.room_id == bed.room_id,
+                Bed.bed_number == payload.bed_number,
+                Bed.id != bed_id
+            )
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Bed number '{payload.bed_number}' already exists in this room."
+            )
+    
+    # Handle status update - VALIDATE HERE
+    if payload.status is not None:
+        # Convert to lowercase for case-insensitive comparison
+        status_value = payload.status.lower().strip()
+        
+        # Map status values
+        valid_statuses = {
+            "available": BedStatus.AVAILABLE,
+            "occupied": BedStatus.OCCUPIED,
+            "maintenance": BedStatus.MAINTENANCE,
+            "reserved": BedStatus.RESERVED
+        }
+        
+        if status_value in valid_statuses:
+            bed.status = valid_statuses[status_value]
+        else:
+            # Return 400 for invalid status
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid status. Must be one of: available, occupied, maintenance, reserved. Got: '{payload.status}'"
+            )
+    
+    # Update bed number
+    if payload.bed_number:
+        bed.bed_number = payload.bed_number
+    
+    # Handle moving bed to different room
+    if payload.room_id is not None and payload.room_id != str(bed.room_id):
+        new_room = await db.execute(select(Room).where(Room.id == payload.room_id))
+        new_room_obj = new_room.scalar_one_or_none()
+        if new_room_obj is None:
+            raise HTTPException(status_code=404, detail="Target room not found.")
+        
+        # Check if bed has active bookings
+        from app.models.booking import Booking, BookingStatus
+        active_booking = await db.execute(
+            select(Booking).where(
+                Booking.bed_id == bed_id,
+                Booking.status.in_([
+                    BookingStatus.APPROVED,
+                    BookingStatus.CHECKED_IN,
+                    BookingStatus.PENDING_APPROVAL
+                ])
+            )
+        )
+        if active_booking.scalar_one_or_none():
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot move bed with active bookings. Please check-out students first."
+            )
+        
+        bed.room_id = payload.room_id
+    
+    try:
+        await db.commit()
+        await db.refresh(bed)
+    except IntegrityError as e:
+        await db.rollback()
+        if "uq_bed_room_number" in str(e):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Bed number '{payload.bed_number or bed.bed_number}' already exists in this room."
+            )
+        raise HTTPException(status_code=500, detail="Database error occurred.")
+    
+    return bed
 
 
 @router.get("/hostels/{hostel_id}/students", response_model=list[StudentResponse])
@@ -528,9 +646,21 @@ async def list_mess_menu(hostel_id: str, db: DBSession, current_user: AdminUser)
 
 
 @router.post("/hostels/{hostel_id}/mess-menu", response_model=MessMenuResponse, status_code=201)
-async def create_mess_menu(hostel_id: str, payload: MessMenuCreateRequest, db: DBSession, current_user: AdminUser):
+async def create_mess_menu(
+    hostel_id: str, 
+    payload: MessMenuCreateRequest,  # Schema validates first
+    db: DBSession, 
+    current_user: AdminUser
+):
     _check_hostel(current_user, hostel_id)
-    return await MessMenuService(db).create_admin_menu(actor_id=current_user.id, hostel_id=hostel_id, payload=payload)
+    try:
+        return await MessMenuService(db).create_admin_menu(
+            actor_id=current_user.id, 
+            hostel_id=hostel_id, 
+            payload=payload
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/hostels/{hostel_id}/supervisors", response_model=list[SupervisorResponse])
@@ -1054,15 +1184,35 @@ async def get_mess_menu_item(
 async def update_mess_menu_item(
     item_id: str,
     db: DBSession,
+    request: Request,
     current_user: AdminUser,
-    item_name: str | None = None,
-    is_veg: bool | None = None,
-    special_note: str | None = None,
 ):
-    """Update a mess menu item"""
-    from app.models.operations import MessMenuItem, MessMenu
-    from sqlalchemy import select
+    """Update a mess menu item with proper validation."""
+    body = await request.json()
     
+    # Manual validation
+    if "meal_type" in body:
+        meal_type = body["meal_type"].strip().lower()
+        valid_meal_types = ["breakfast", "lunch", "snacks", "dinner"]
+        if meal_type not in valid_meal_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"meal_type must be one of: {', '.join(valid_meal_types)}"
+            )
+        body["meal_type"] = meal_type
+    
+    if "day_of_week" in body:
+        day_of_week = body["day_of_week"].strip().capitalize()
+        valid_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        if day_of_week not in valid_days:
+            raise HTTPException(
+                status_code=400,
+                detail=f"day_of_week must be one of: {', '.join(valid_days)}"
+            )
+        body["day_of_week"] = day_of_week
+    
+    # Continue with update...
+    from app.models.operations import MessMenuItem, MessMenu
     result = await db.execute(
         select(MessMenuItem, MessMenu)
         .join(MessMenu, MessMenu.id == MessMenuItem.menu_id)
@@ -1075,17 +1225,20 @@ async def update_mess_menu_item(
     
     item, menu = row
     
-    # Check permission
     if str(menu.hostel_id) not in current_user.hostel_ids:
         raise HTTPException(status_code=403, detail="Access denied.")
     
-    # Update fields
-    if item_name is not None:
-        item.item_name = item_name
-    if is_veg is not None:
-        item.is_veg = is_veg
-    if special_note is not None:
-        item.special_note = special_note
+    # Apply updates
+    if "item_name" in body:
+        item.item_name = body["item_name"]
+    if "is_veg" in body:
+        item.is_veg = body["is_veg"]
+    if "special_note" in body:
+        item.special_note = body["special_note"]
+    if "meal_type" in body:
+        item.meal_type = body["meal_type"]
+    if "day_of_week" in body:
+        item.day_of_week = body["day_of_week"]
     
     await db.commit()
     await db.refresh(item)
@@ -1095,9 +1248,10 @@ async def update_mess_menu_item(
         "item_name": item.item_name,
         "is_veg": item.is_veg,
         "special_note": item.special_note,
+        "meal_type": item.meal_type,
+        "day_of_week": item.day_of_week,
         "updated_at": item.updated_at,
     }
-
 
 @router.delete("/mess-menu/{item_id}", status_code=204)
 async def delete_mess_menu_item(
@@ -1129,3 +1283,81 @@ async def delete_mess_menu_item(
     await db.commit()
     
     return Response(status_code=204)
+
+@router.get("/rooms/{room_id}/beds/count")
+async def get_room_bed_stats(room_id: str, db: DBSession, current_user: AdminUser):
+    """Get bed statistics for a room."""
+    room_hostel_id = await _resolve_room_hostel_id(db, room_id)
+    _check_hostel(current_user, room_hostel_id)
+    
+    from sqlalchemy import select, func
+    from app.models.room import Bed
+    
+    # Get total beds count
+    total_result = await db.execute(
+        select(func.count()).select_from(Bed).where(Bed.room_id == room_id)
+    )
+    total_beds = total_result.scalar() or 0
+    
+    # Get bed counts by status
+    status_counts = await db.execute(
+        select(Bed.status, func.count())
+        .where(Bed.room_id == room_id)
+        .group_by(Bed.status)
+    )
+    
+    return {
+        "room_id": room_id,
+        "total_beds": total_beds,
+        "status_counts": {status.value: count for status, count in status_counts.all()},
+        "capacity": None  # Will be filled by caller
+    }
+
+@router.get("/rooms/{room_id}/beds/stats")
+async def get_room_bed_stats(room_id: str, db: DBSession, current_user: AdminUser):
+    """Get bed statistics for a room."""
+    from sqlalchemy import select, func
+    from app.models.room import Bed
+    
+    room_hostel_id = await _resolve_room_hostel_id(db, room_id)
+    _check_hostel(current_user, room_hostel_id)
+    
+    # Get total beds
+    total_result = await db.execute(
+        select(func.count()).select_from(Bed).where(Bed.room_id == room_id)
+    )
+    total_beds = total_result.scalar() or 0
+    
+    # Get counts by status
+    status_counts = await db.execute(
+        select(Bed.status, func.count())
+        .where(Bed.room_id == room_id)
+        .group_by(Bed.status)
+    )
+    
+    return {
+        "room_id": room_id,
+        "total_beds": total_beds,
+        "status_counts": {status.value: count for status, count in status_counts.all()}
+    }
+    
+@router.patch("/maintenance/{request_id}", response_model=MaintenanceResponse)
+async def update_maintenance_request_admin(
+    request_id: str,
+    payload: MaintenanceUpdateRequest,
+    db: DBSession,
+    current_user: AdminUser
+):
+    """
+    Update a maintenance request as admin.
+    Admins can approve requests (change from pending_approval to approved)
+    or update any request in their hostel.
+    """
+    maintenance_hostel_id = await _resolve_maintenance_hostel_id(db, request_id)
+    _check_hostel(current_user, maintenance_hostel_id)
+    
+    return await MaintenanceService(db).update_admin_request(
+        admin_id=current_user.id,
+        request_id=request_id,
+        payload=payload
+    )

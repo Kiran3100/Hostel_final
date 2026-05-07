@@ -385,3 +385,63 @@ async def create_booking_payment(
         actor_id=current_user.id,
         payload=payload,
     )
+
+# FILE: app/api/v1/public/routes.py
+# Add this endpoint:
+
+@router.get("/hostels/{hostel_id}/subscription-status")
+async def check_hostel_subscription_status(
+    hostel_id: str,
+    db: DBSession,
+    check_in_date: str | None = None,
+    check_out_date: str | None = None,
+):
+    """
+    Check if a hostel has an active subscription for booking.
+    Returns can_book flag and subscription details.
+    """
+    from datetime import date
+    
+    result = await db.execute(
+        select(Subscription).where(
+            Subscription.hostel_id == hostel_id,
+            Subscription.status == "active"
+        )
+    )
+    subscription = result.scalar_one_or_none()
+    
+    if not subscription:
+        return {
+            "can_book": False,
+            "has_subscription": False,
+            "message": "This hostel does not have an active subscription."
+        }
+    
+    # Check date range if provided
+    if check_in_date and check_out_date:
+        check_in = date.fromisoformat(check_in_date)
+        check_out = date.fromisoformat(check_out_date)
+        
+        if check_out > subscription.end_date:
+            return {
+                "can_book": False,
+                "has_subscription": True,
+                "subscription_end_date": subscription.end_date.isoformat(),
+                "message": f"Booking dates exceed subscription expiry ({subscription.end_date})."
+            }
+        if check_in < subscription.start_date:
+            return {
+                "can_book": False,
+                "has_subscription": True,
+                "subscription_start_date": subscription.start_date.isoformat(),
+                "message": f"Booking dates start before subscription begins ({subscription.start_date})."
+            }
+    
+    return {
+        "can_book": True,
+        "has_subscription": True,
+        "subscription_tier": subscription.tier,
+        "subscription_start_date": subscription.start_date.isoformat(),
+        "subscription_end_date": subscription.end_date.isoformat(),
+        "message": "Hostel has an active subscription."
+    }

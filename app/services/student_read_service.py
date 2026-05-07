@@ -20,10 +20,6 @@ class StudentReadService:
         if user is None:
             return None
         
-        # Get hostel, room, bed, booking directly from the repository
-        # Uses self.repository which has access to session
-
-        
         # Get hostel
         hostel_result = await self.repository.session.execute(
             select(Hostel).where(Hostel.id == student.hostel_id)
@@ -42,7 +38,7 @@ class StudentReadService:
         )
         bed = bed_result.scalar_one_or_none()
         
-        # Get booking
+        # Get booking (includes gender!)
         booking_result = await self.repository.session.execute(
             select(Booking).where(Booking.id == student.booking_id)
         )
@@ -70,6 +66,8 @@ class StudentReadService:
             "hostel_name": hostel.name if hostel else None,
             "hostel_city": hostel.city if hostel else None,
             "hostel_type": hostel.hostel_type.value if hostel and hasattr(hostel.hostel_type, "value") else None,
+            "gender": booking.gender if booking else None,  # ← ADD THIS
+            "date_of_birth": booking.date_of_birth if booking else None,  # ← ADD THIS (optional)
             "created_at": student.created_at,
             "updated_at": student.updated_at,
         }

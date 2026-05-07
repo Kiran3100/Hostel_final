@@ -1,7 +1,6 @@
-from pydantic import BaseModel, Field
-
 from app.schemas.base import TimestampedResponse
-
+from pydantic import BaseModel, Field, field_validator
+from typing import Optional
 
 class RoomCreateRequest(BaseModel):
     room_number: str = Field(min_length=1, max_length=50)
@@ -32,9 +31,19 @@ class BedCreateRequest(BaseModel):
     status: str = Field(default="available", min_length=2, max_length=50)
 
 
+
 class BedUpdateRequest(BaseModel):
     bed_number: str | None = Field(default=None, min_length=1, max_length=50)
-    status: str | None = Field(default=None, min_length=2, max_length=50)
+    status: str | None = Field(default=None, max_length=50)  # Remove min_length validation
+    room_id: str | None = Field(default=None, description="Move bed to a different room")
+    
+    @field_validator("status", mode="before")
+    @classmethod
+    def validate_status(cls, v: str | None) -> str | None:
+        """Allow any status string - service layer will validate against enum"""
+        if v is None:
+            return v
+        return v.strip() if isinstance(v, str) else v
 
 
 class RoomResponse(TimestampedResponse):

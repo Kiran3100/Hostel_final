@@ -21,6 +21,15 @@ class StudentProfileResponse(TimestampedResponse):
     email: str
     phone: str
     profile_picture_url: str | None = None
+    gender: str | None = None
+    date_of_birth: date | None = None
+    hostel_name: str | None = None
+    hostel_city: str | None = None
+    hostel_type: str | None = None
+    room_number: str | None = None
+    bed_number: str | None = None
+    booking_number: str | None = None
+    booking_mode: str | None = None
 
 
 class StudentResponse(TimestampedResponse):
@@ -39,6 +48,8 @@ class StudentResponse(TimestampedResponse):
     profile_picture_url: str | None
     room_number: str | None = None
     bed_number: str | None = None
+    gender: str | None = None  # ← ADD THIS
+    date_of_birth: str | None = None  # ← ADD THIS (optional)
 
 
 class CompleteStudentDetailResponse(APIModel):

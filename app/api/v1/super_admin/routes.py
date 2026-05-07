@@ -4,14 +4,14 @@ from fastapi.responses import Response
 from datetime import date, timedelta 
 import re
 from sqlalchemy import select
+from app.api.v1.supervisor.routes import SupervisorUser
 from app.models.user import User, UserRole
 from uuid import uuid4
 from datetime import UTC, datetime
-
-
 from app.dependencies import CurrentUser, require_roles
 from app.dependencies import DBSession
 from app.models.hostel import HostelStatus
+from app.schemas.maintenance import MaintenanceResponse, MaintenanceUpdateRequest
 from app.schemas.super_admin import (
     AssignHostelRequest,
     SuperAdminProfileResponse,
@@ -190,7 +190,6 @@ async def list_admins(_: SuperAdmin, db: DBSession):
     """**List all hostel admins** on the platform."""
     return await SuperAdminService(db).list_admins()
 
-
 @router.post("/admins", response_model=SuperAdminAdminResponse, status_code=201)
 async def create_admin(payload: SuperAdminAdminCreateRequest, _: SuperAdmin, db: DBSession):
     """
@@ -201,19 +200,17 @@ async def create_admin(payload: SuperAdminAdminCreateRequest, _: SuperAdmin, db:
     
     Requirements:
     - Email must be valid format (e.g., user@example.com)
-    - Phone must be 10 digits (Indian format) or 10-15 digits international
+    - Phone must be 10 digits (Indian format)
     - Password must be at least 8 chars with uppercase, lowercase, and number
     - Full name must be at least 2 characters
     """
     from app.core.security import hash_password
-    from app.models.user import User, UserRole
-    from sqlalchemy import select
     import re
     
     # Normalize email (lowercase)
     normalized_email = payload.email.lower().strip()
     
-    # Check if email already exists
+    # CHECK FOR EXISTING EMAIL - This is the critical part
     existing_email = await db.execute(
         select(User).where(User.email == normalized_email)
     )
@@ -223,38 +220,22 @@ async def create_admin(payload: SuperAdminAdminCreateRequest, _: SuperAdmin, db:
             detail=f"Email '{payload.email}' is already registered."
         )
     
-    # Normalize phone: remove all non-digit characters
-    # Keep only digits for storage and checking
+    # Normalize phone and check for existing phone
     normalized_phone = re.sub(r'[^0-9]', '', payload.phone)
     
-    # For Indian numbers, ensure 10 digits
-    # Check if phone is Indian number (starts with 91 or +91)
-    # If it's an international format, keep as is after cleaning
+    # Handle Indian number format (10 digits after removing +91 or 0)
     if normalized_phone.startswith('91') and len(normalized_phone) == 12:
-        normalized_phone = normalized_phone[2:]  # Remove 91 prefix
+        normalized_phone = normalized_phone[2:]
     elif normalized_phone.startswith('0'):
-        normalized_phone = normalized_phone[1:]  # Remove leading 0
+        normalized_phone = normalized_phone[1:]
     
-    # Validate phone length
-    if len(normalized_phone) < 10:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Phone number must be at least 10 digits"
-        )
-    if len(normalized_phone) > 15:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Phone number must be at most 15 digits"
-        )
-    
-    # For Indian numbers (10 digits), validate they start with 6-9
     if len(normalized_phone) == 10 and not normalized_phone[0] in ['6', '7', '8', '9']:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Indian phone number must start with 6, 7, 8, or 9"
         )
     
-    # Check if phone already exists
+    # CHECK FOR EXISTING PHONE
     existing_phone = await db.execute(
         select(User).where(User.phone == normalized_phone)
     )
@@ -264,7 +245,7 @@ async def create_admin(payload: SuperAdminAdminCreateRequest, _: SuperAdmin, db:
             detail=f"Phone number '{payload.phone}' is already registered."
         )
     
-    # Validate password
+    # Validate password strength
     if len(payload.password) < 8:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -289,7 +270,7 @@ async def create_admin(payload: SuperAdminAdminCreateRequest, _: SuperAdmin, db:
     # Create admin user with normalized phone
     admin = User(
         email=normalized_email,
-        phone=normalized_phone,  # Store only digits
+        phone=normalized_phone,
         full_name=payload.full_name.strip(),
         password_hash=hash_password(payload.password),
         role=UserRole.HOSTEL_ADMIN,
@@ -879,4 +860,28 @@ async def validate_password(payload: ValidatePasswordRequest):
     return PasswordValidationResponse(
         is_valid=len(errors) == 0,
         errors=errors
+    )
+    
+
+@router.patch("/maintenance/{request_id}", response_model=MaintenanceResponse)
+async def update_maintenance(
+    request_id: str, 
+    payload: MaintenanceUpdateRequest, 
+    current_user: SupervisorUser, 
+    db: DBSession
+):
+    """**Update maintenance request** — status, vendor info, actual cost."""
+    # Validate status before passing to service
+    if payload.status is not None:
+        valid_statuses = ["open", "in_progress", "completed", "cancelled"]
+        if payload.status not in valid_statuses:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid status. Must be one of: {', '.join(valid_statuses)}"
+            )
+    
+    return await MaintenanceService(db).update_supervisor_request(
+        supervisor_id=current_user.id, 
+        request_id=request_id, 
+        payload=payload,
     )

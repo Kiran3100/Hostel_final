@@ -62,7 +62,7 @@ class NoticeService:
             select(Notice).where(Notice.id == notice_id)
         )
         return result.scalar_one_or_none()
-    
+        
     async def list_admin_notices(
         self,
         *,
@@ -107,11 +107,11 @@ class NoticeService:
                 "notice_type": notice.notice_type,
                 "priority": notice.priority,
                 "is_published": notice.is_published,
-                "publish_at": notice.publish_at,
-                "expires_at": notice.expires_at,
+                "publish_at": notice.publish_at.isoformat() if notice.publish_at else None,  # ADD THIS
+                "expires_at": notice.expires_at.isoformat() if notice.expires_at else None,  # ADD THIS
                 "created_by": str(notice.created_by),
-                "created_at": notice.created_at,
-                "updated_at": notice.updated_at,
+                "created_at": notice.created_at.isoformat(),
+                "updated_at": notice.updated_at.isoformat(),
                 "read_count": 0,
                 "total_students": 0,
             })
@@ -190,11 +190,11 @@ class NoticeService:
                 "notice_type": notice.notice_type,
                 "priority": notice.priority,
                 "is_published": notice.is_published,
-                "publish_at": notice.publish_at,
-                "expires_at": notice.expires_at,
+                "publish_at": notice.publish_at.isoformat() if notice.publish_at else None,
+                "expires_at": notice.expires_at.isoformat() if notice.expires_at else None,
                 "created_by": str(notice.created_by),
-                "created_at": notice.created_at,
-                "updated_at": notice.updated_at,
+                "created_at": notice.created_at.isoformat(),
+                "updated_at": notice.updated_at.isoformat(),
                 "read_count": 0,
                 "total_students": 0,
                 "is_read": is_read,
@@ -206,6 +206,7 @@ class NoticeService:
             "page": page,
             "per_page": per_page,
         }
+
 
     # ==================== UPDATE ====================
     

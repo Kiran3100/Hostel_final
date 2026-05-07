@@ -6,6 +6,13 @@ from starlette.responses import Response
 from typing import Optional
 from uuid import UUID
 from sqlalchemy import select, or_, func, desc
+from app.models.user import User
+from pydantic import BaseModel, Field, model_validator
+import re
+from datetime import UTC, datetime
+from app.core.security import verify_password, hash_password
+from app.repositories.user_repository import UserRepository
+from pydantic import ValidationError as PydanticValidationError
 
 from app.dependencies import CurrentUser, require_roles
 from app.dependencies import DBSession
@@ -23,9 +30,17 @@ from app.services.maintenance_service import MaintenanceService
 from app.services.mess_menu_service import MessMenuService
 from app.services.notice_service import NoticeService
 from app.services.supervisor_service import SupervisorDashboardResponse, SupervisorService
+from pydantic import BaseModel, Field
+from app.core.security import verify_password, hash_password
 
 router = APIRouter()
 SupervisorUser = Annotated[CurrentUser, Depends(require_roles("supervisor"))]
+
+class SupervisorChangePasswordRequest(BaseModel):
+    """Request to change supervisor password"""
+    old_password: str = Field(min_length=8, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+    confirm_password: str = Field(min_length=8, max_length=128)
 
 
 @router.get("/dashboard", response_model=SupervisorDashboardResponse)
@@ -33,15 +48,29 @@ async def dashboard(current_user: SupervisorUser, db: DBSession):
     """**Supervisor dashboard** — students, complaints, attendance, maintenance counts for assigned hostel."""
     return await SupervisorService(db).get_dashboard(current_user.id)
 
-
 @router.get("/students", response_model=list[StudentResponse])
 async def students(current_user: SupervisorUser, db: DBSession):
     """**List students in the supervisor's assigned hostel.**"""
-    hostel_ids = list(current_user.hostel_ids)
-    if not hostel_ids:
-        return []
-    return await AdminService(db).list_students_for_hostels(hostel_ids)
-
+    try:
+        hostel_ids = list(current_user.hostel_ids)
+        if not hostel_ids:
+            return []
+        
+        # Use AdminService which now includes gender
+        admin_service = AdminService(db)
+        students_data = await admin_service.list_students_for_hostels(hostel_ids)
+        
+        # Log for debugging
+        print(f"Supervisor students: found {len(students_data)} students")
+        if students_data:
+            print(f"Sample student gender: {students_data[0].get('gender', 'NOT FOUND')}")
+        
+        return students_data
+    except Exception as e:
+        print(f"Error in supervisor students endpoint: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/complaints", response_model=list[ComplaintResponse])
 async def complaints(current_user: SupervisorUser, db: DBSession):
@@ -97,10 +126,29 @@ async def create_maintenance(payload: MaintenanceCreateRequest, current_user: Su
 
 
 @router.patch("/maintenance/{request_id}", response_model=MaintenanceResponse)
-async def update_maintenance(request_id: str, payload: MaintenanceUpdateRequest, current_user: SupervisorUser, db: DBSession):
+async def update_maintenance(
+    request_id: str, 
+    payload: MaintenanceUpdateRequest, 
+    current_user: SupervisorUser, 
+    db: DBSession
+):
     """**Update maintenance request** — status, vendor info, actual cost."""
+    
+    # Validate status before passing to service
+    if payload.status is not None:
+        valid_statuses = ["open", "in_progress", "completed", "cancelled", "approved"]
+        status_value = payload.status.lower().strip()
+        
+        if status_value not in valid_statuses:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid status. Must be one of: {', '.join(valid_statuses)}. Got: '{payload.status}'"
+            )
+    
     return await MaintenanceService(db).update_supervisor_request(
-        supervisor_id=current_user.id, request_id=request_id, payload=payload,
+        supervisor_id=current_user.id, 
+        request_id=request_id, 
+        payload=payload,
     )
 
 
@@ -409,3 +457,72 @@ async def delete_complaint(
     await db.commit()
     
     return Response(status_code=204)
+
+@router.post("/change-password")
+async def change_password(
+    payload: SupervisorChangePasswordRequest,
+    current_user: SupervisorUser,
+    db: DBSession
+):
+    """
+    **Change supervisor password.**
+    
+    Requires current password verification. After successful change,
+    all other sessions are revoked for security.
+    """
+    # MANUAL VALIDATION - Check if passwords match FIRST
+    if payload.new_password != payload.confirm_password:
+        raise HTTPException(
+            status_code=400,
+            detail="New passwords do not match."
+        )
+    
+    # Get the user record
+    result = await db.execute(select(User).where(User.id == current_user.id))
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    
+    # Verify current password
+    if not verify_password(payload.old_password, user.password_hash):
+        raise HTTPException(
+            status_code=401, 
+            detail="Current password is incorrect."
+        )
+    
+    # Validate new password strength
+    errors = []
+    if len(payload.new_password) < 8:
+        errors.append("Password must be at least 8 characters")
+    if not re.search(r'[A-Z]', payload.new_password):
+        errors.append("Password must contain at least one uppercase letter")
+    if not re.search(r'[a-z]', payload.new_password):
+        errors.append("Password must contain at least one lowercase letter")
+    if not re.search(r'[0-9]', payload.new_password):
+        errors.append("Password must contain at least one number")
+    if not re.search(r'[!@#$%^&*(),.?":{}|<>]', payload.new_password):
+        errors.append("Password must contain at least one special character")
+    
+    if errors:
+        raise HTTPException(
+            status_code=400, 
+            detail="; ".join(errors)
+        )
+    
+    # Hash and update password
+    user.password_hash = hash_password(payload.new_password)
+    
+    # Revoke all other sessions for security (keep current)
+    repo = UserRepository(db)
+    await repo.revoke_all_refresh_tokens(
+        user_id=current_user.id,
+        revoked_at=datetime.now(UTC)
+    )
+    
+    await db.commit()
+    
+    return {
+        "message": "Password changed successfully.",
+        "user_id": str(user.id)
+    }

@@ -3,7 +3,6 @@ Admin service – hostel management operations.
 """
 from datetime import date
 from fastapi import HTTPException, status
-from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import hash_password
 from app.models.booking import Booking, BookingMode, BookingStatus, BedStay, BedStayStatus
@@ -21,7 +20,9 @@ from app.schemas.admin import SupervisorCreateRequest
 from app.services.complaint_service import ComplaintService
 from app.services.maintenance_service import MaintenanceService
 from app.services.payment_service import PaymentService
+from app.services.subscription_validator import SubscriptionValidator
 from app.repositories.room_repository import RoomRepository
+from sqlalchemy import or_, select, update, delete, func
 
 class AdminService:
     def __init__(self, session: AsyncSession) -> None:
@@ -178,6 +179,24 @@ class AdminService:
         room = await self.repository.get_room_by_id(room_id)
         if room is None:
             raise HTTPException(status_code=404, detail="Room not found.")
+        
+        # Check if bed number already exists in this room
+        existing_beds = await self.repository.list_beds(room_id)
+        existing_bed_numbers = [bed.bed_number for bed in existing_beds]
+        
+        if payload.bed_number in existing_bed_numbers:
+            raise HTTPException(
+                status_code=409,  # Conflict - duplicate bed number
+                detail=f"Bed number '{payload.bed_number}' already exists in this room."
+            )
+        
+        # Check if room is at capacity
+        if len(existing_beds) >= room.total_beds:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot add more beds. Room has capacity of {room.total_beds} beds."
+            )
+        
         bed = Bed(
             hostel_id=room.hostel_id,
             room_id=room_id,
@@ -185,29 +204,116 @@ class AdminService:
             status=payload.status or BedStatus.AVAILABLE,
         )
         self.session.add(bed)
+        
+        # Update room total_beds
         room.total_beds += 1
+        
         await self.session.commit()
         await self.session.refresh(bed)
         return bed
 
+
     async def update_bed(self, bed_id: str, payload: BedUpdateRequest) -> Bed:
-        """Update bed status (e.g., set to maintenance)."""
+        """Update bed details including moving to different room."""
         bed = await self.repository.get_bed_by_id(bed_id)
         if bed is None:
             raise HTTPException(status_code=404, detail="Bed not found.")
+        
+        # Handle moving bed to different room
+        if payload.room_id is not None and payload.room_id != str(bed.room_id):
+            # Verify new room exists
+            new_room = await self.repository.get_room_by_id(payload.room_id)
+            if new_room is None:
+                raise HTTPException(status_code=404, detail="Target room not found.")
+            
+            # Verify same hostel
+            if str(new_room.hostel_id) != str(bed.hostel_id):
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Cannot move bed to a room in a different hostel."
+                )
+            
+            # Check if bed has active bookings
+            from app.models.booking import Booking, BookingStatus
+            active_booking = await self.session.execute(
+                select(Booking).where(
+                    Booking.bed_id == bed_id,
+                    Booking.status.in_([
+                        BookingStatus.APPROVED,
+                        BookingStatus.CHECKED_IN,
+                        BookingStatus.PENDING_APPROVAL
+                    ])
+                )
+            )
+            if active_booking.scalar_one_or_none():
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot move bed with active bookings. Please check-out students first."
+                )
+            
+            # Check if bed number already exists in target room
+            existing_beds = await self.repository.list_beds(payload.room_id)
+            if bed.bed_number in [b.bed_number for b in existing_beds]:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Bed number '{bed.bed_number}' already exists in target room."
+                )
+            
+            # Move the bed
+            bed.room_id = payload.room_id
+        
+        # Handle bed number change
+        if payload.bed_number and payload.bed_number != bed.bed_number:
+            # Check for duplicate in current room
+            target_room_id = payload.room_id if payload.room_id else bed.room_id
+            existing_beds = await self.repository.list_beds(target_room_id)
+            if payload.bed_number in [b.bed_number for b in existing_beds if b.id != bed_id]:
+                raise HTTPException(
+                    status_code=409, 
+                    detail=f"Bed number '{payload.bed_number}' already exists in this room."
+                )
+            bed.bed_number = payload.bed_number
+        
+        # Handle status change - VALIDATE HERE
         if payload.status is not None:
-            bed.status = payload.status
+            # Import BedStatus if not already imported
+            from app.models.room import BedStatus
+            
+            # Convert to lowercase for case-insensitive comparison
+            status_value = payload.status.lower().strip()
+            
+            # Map status values
+            valid_statuses = {
+                "available": BedStatus.AVAILABLE,
+                "occupied": BedStatus.OCCUPIED,
+                "maintenance": BedStatus.MAINTENANCE,
+                "reserved": BedStatus.RESERVED
+            }
+            
+            if status_value in valid_statuses:
+                bed.status = valid_statuses[status_value]
+            else:
+                # Return 400 for invalid status
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid status. Must be one of: available, occupied, maintenance, reserved. Got: '{payload.status}'"
+                )
+        
         await self.session.commit()
         await self.session.refresh(bed)
         return bed
 
-    async def list_students(self, hostel_id: str) -> list[Student]:
-        """List all checked-in students for a hostel."""
-        return await self.repository.list_students(hostel_id)
 
-    async def list_students_for_hostels(self, hostel_ids: list[str]) -> list[Student]:
+    async def list_students(self, hostel_id: str) -> list[dict]:
+        """List all checked-in students for a hostel."""
+        students_data = await self.repository.list_students(hostel_id)
+        # The repository now returns dict objects directly
+        return students_data
+
+    async def list_students_for_hostels(self, hostel_ids: list[str]) -> list[dict]:
         """List students across multiple hostels."""
-        return await self.repository.list_students_by_hostel_ids(hostel_ids)
+        students_data = await self.repository.list_students_by_hostel_ids(hostel_ids)
+        return students_data
 
     async def list_attendance(self, hostel_id: str):
         """List attendance records for a hostel."""
@@ -278,6 +384,27 @@ class AdminService:
         if str(bed.hostel_id) != hostel_id:
             raise HTTPException(status_code=400, detail="Bed does not belong to this hostel.")
 
+        # Validate gender if provided
+        if hasattr(payload, 'gender') and payload.gender:
+            valid_genders = ["M", "F", "Other", "MALE", "FEMALE", "male", "female", "other"]
+            if payload.gender not in valid_genders:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid gender. Must be one of: M, F, Other. Got: '{payload.gender}'"
+                )
+            # Normalize gender
+            gender_value = payload.gender.upper()
+            if gender_value == "MALE":
+                gender_value = "M"
+            elif gender_value == "FEMALE":
+                gender_value = "F"
+            elif gender_value == "OTHER":
+                gender_value = "Other"
+            else:
+                gender_value = gender_value  # Keep as is (M, F, Other)
+        else:
+            gender_value = None
+
         user = User(
             email=payload.email,
             phone=payload.phone,
@@ -304,6 +431,14 @@ class AdminService:
         check_out = date.fromisoformat(payload.check_out_date)
         booking_number = f"SE-{str(user.id)[:8].upper()}"
 
+        # Parse date_of_birth if provided
+        date_of_birth = None
+        if hasattr(payload, 'date_of_birth') and payload.date_of_birth:
+            try:
+                date_of_birth = date.fromisoformat(payload.date_of_birth)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid date_of_birth format. Use YYYY-MM-DD.")
+
         booking = Booking(
             visitor_id=str(user.id),
             hostel_id=hostel_id,
@@ -320,6 +455,8 @@ class AdminService:
             status=BookingStatus.CHECKED_IN,
             full_name=payload.full_name,
             approved_by=actor_id,
+            gender=gender_value,  # ← ADD THIS
+            date_of_birth=date_of_birth,  # ← ADD THIS
         )
         self.session.add(booking)
         await self.session.flush()
@@ -364,6 +501,8 @@ class AdminService:
             "room_id": str(student.room_id),
             "bed_id": str(student.bed_id),
             "check_in_date": str(student.check_in_date),
+            "gender": gender_value,  # ← ADD THIS
+            "date_of_birth": str(date_of_birth) if date_of_birth else None,  # ← ADD THIS
         }
 
     async def delete_room(self, room_id: str) -> None:

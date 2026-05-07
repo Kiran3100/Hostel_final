@@ -1,9 +1,9 @@
+# FILE: app/schemas/maintenance.py
+
 from datetime import datetime
-
-from pydantic import BaseModel, Field
-
+from pydantic import BaseModel, Field, field_validator
 from app.schemas.base import APIModel
-
+from typing import Optional
 
 class MaintenanceCreateRequest(BaseModel):
     room_id: str | None = None
@@ -15,12 +15,20 @@ class MaintenanceCreateRequest(BaseModel):
 
 
 class MaintenanceUpdateRequest(BaseModel):
-    status: str | None = None
+    status: str | None = Field(default=None, max_length=50)
     estimated_cost: float | None = None
     actual_cost: float | None = None
     assigned_vendor_name: str | None = None
     vendor_contact: str | None = None
     requires_admin_approval: bool | None = None
+    
+    @field_validator("status", mode="before")
+    @classmethod
+    def validate_status(cls, v: str | None) -> str | None:
+        """Validate status - service layer will check against valid values"""
+        if v is None:
+            return v
+        return v.strip() if isinstance(v, str) else v
 
 
 class MaintenanceResponse(APIModel):

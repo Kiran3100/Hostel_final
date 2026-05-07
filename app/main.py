@@ -387,15 +387,23 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(PydanticValidationError)
 async def pydantic_validation_exception_handler(request: Request, exc: PydanticValidationError):
-    """Handle Pydantic validation errors."""
+    """Convert Pydantic validation errors to 400 Bad Request (not 422)"""
+    errors = []
+    for error in exc.errors():
+        errors.append({
+            "field": ".".join(str(loc) for loc in error["loc"]),
+            "message": error["msg"],
+            "type": error["type"]
+        })
+    
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_400_BAD_REQUEST,
         content={
-            "detail": str(exc),
-            "code": "validation_error"
+            "detail": "Validation error",
+            "code": "validation_error",
+            "errors": errors
         }
     )
-
 
 @app.exception_handler(404)
 async def not_found_handler(request, exc):

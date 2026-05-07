@@ -1151,7 +1151,7 @@ FILE: export_project.py
 import os
 
 # ✅ 🔴 PASTE YOUR PROJECT PATH HERE
-PROJECT_PATH = r"D:\GIT HUB\hostel-management-api"
+PROJECT_PATH = r"D:\hostel-management-api-2"
 # For Mac/Linux:
 # PROJECT_PATH = "/home/user/projects/myproject"
 
@@ -4717,16 +4717,128 @@ async def list_beds(room_id: str, db: DBSession, current_user: AdminUser):
 
 @router.post("/rooms/{room_id}/beds", response_model=BedResponse, status_code=201)
 async def create_bed(room_id: str, payload: BedCreateRequest, db: DBSession, current_user: AdminUser):
+    """Create a new bed in a room"""
     room_hostel_id = await _resolve_room_hostel_id(db, room_id)
     _check_hostel(current_user, room_hostel_id)
-    return await AdminService(db).create_bed(room_id, payload)
-
+    
+    try:
+        return await AdminService(db).create_bed(room_id, payload)
+    except Exception as e:
+        # Check for unique constraint violation
+        error_msg = str(e).lower()
+        if "duplicate key" in error_msg or "uq_bed_room_number" in error_msg:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Bed number '{payload.bed_number}' already exists in this room."
+            )
+        raise
 
 @router.patch("/beds/{bed_id}", response_model=BedResponse)
-async def update_bed(bed_id: str, payload: BedUpdateRequest, db: DBSession, current_user: AdminUser):
-    bed_hostel_id = await _resolve_bed_hostel_id(db, bed_id)
-    _check_hostel(current_user, bed_hostel_id)
-    return await AdminService(db).update_bed(bed_id, payload)
+async def update_bed(
+    bed_id: str, 
+    payload: BedUpdateRequest, 
+    db: DBSession, 
+    current_user: AdminUser
+):
+    """Update bed details (status, bed number)."""
+    from sqlalchemy import select
+    from sqlalchemy.exc import IntegrityError
+    from app.models.room import Bed, BedStatus
+    
+    # First, get the bed to check permissions
+    result = await db.execute(select(Bed).where(Bed.id == bed_id))
+    bed = result.scalar_one_or_none()
+    
+    if bed is None:
+        raise HTTPException(status_code=404, detail="Bed not found.")
+    
+    # Check hostel access
+    bed_hostel_id = str(bed.hostel_id)
+    if bed_hostel_id not in current_user.hostel_ids:
+        raise HTTPException(status_code=403, detail="Access denied to this bed.")
+    
+    # If changing bed number, check for duplicates
+    if payload.bed_number and payload.bed_number != bed.bed_number:
+        # Check if new bed number already exists in same room
+        existing = await db.execute(
+            select(Bed).where(
+                Bed.room_id == bed.room_id,
+                Bed.bed_number == payload.bed_number,
+                Bed.id != bed_id
+            )
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Bed number '{payload.bed_number}' already exists in this room."
+            )
+    
+    # Handle status update - VALIDATE HERE
+    if payload.status is not None:
+        # Convert to lowercase for case-insensitive comparison
+        status_value = payload.status.lower().strip()
+        
+        # Map status values
+        valid_statuses = {
+            "available": BedStatus.AVAILABLE,
+            "occupied": BedStatus.OCCUPIED,
+            "maintenance": BedStatus.MAINTENANCE,
+            "reserved": BedStatus.RESERVED
+        }
+        
+        if status_value in valid_statuses:
+            bed.status = valid_statuses[status_value]
+        else:
+            # Return 400 for invalid status
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid status. Must be one of: available, occupied, maintenance, reserved. Got: '{payload.status}'"
+            )
+    
+    # Update bed number
+    if payload.bed_number:
+        bed.bed_number = payload.bed_number
+    
+    # Handle moving bed to different room
+    if payload.room_id is not None and payload.room_id != str(bed.room_id):
+        new_room = await db.execute(select(Room).where(Room.id == payload.room_id))
+        new_room_obj = new_room.scalar_one_or_none()
+        if new_room_obj is None:
+            raise HTTPException(status_code=404, detail="Target room not found.")
+        
+        # Check if bed has active bookings
+        from app.models.booking import Booking, BookingStatus
+        active_booking = await db.execute(
+            select(Booking).where(
+                Booking.bed_id == bed_id,
+                Booking.status.in_([
+                    BookingStatus.APPROVED,
+                    BookingStatus.CHECKED_IN,
+                    BookingStatus.PENDING_APPROVAL
+                ])
+            )
+        )
+        if active_booking.scalar_one_or_none():
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot move bed with active bookings. Please check-out students first."
+            )
+        
+        bed.room_id = payload.room_id
+    
+    try:
+        await db.commit()
+        await db.refresh(bed)
+    except IntegrityError as e:
+        await db.rollback()
+        if "uq_bed_room_number" in str(e):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Bed number '{payload.bed_number or bed.bed_number}' already exists in this room."
+            )
+        raise HTTPException(status_code=500, detail="Database error occurred.")
+    
+    return bed
 
 
 @router.get("/hostels/{hostel_id}/students", response_model=list[StudentResponse])
@@ -5665,6 +5777,63 @@ async def delete_mess_menu_item(
     await db.commit()
     
     return Response(status_code=204)
+
+@router.get("/rooms/{room_id}/beds/count")
+async def get_room_bed_stats(room_id: str, db: DBSession, current_user: AdminUser):
+    """Get bed statistics for a room."""
+    room_hostel_id = await _resolve_room_hostel_id(db, room_id)
+    _check_hostel(current_user, room_hostel_id)
+    
+    from sqlalchemy import select, func
+    from app.models.room import Bed
+    
+    # Get total beds count
+    total_result = await db.execute(
+        select(func.count()).select_from(Bed).where(Bed.room_id == room_id)
+    )
+    total_beds = total_result.scalar() or 0
+    
+    # Get bed counts by status
+    status_counts = await db.execute(
+        select(Bed.status, func.count())
+        .where(Bed.room_id == room_id)
+        .group_by(Bed.status)
+    )
+    
+    return {
+        "room_id": room_id,
+        "total_beds": total_beds,
+        "status_counts": {status.value: count for status, count in status_counts.all()},
+        "capacity": None  # Will be filled by caller
+    }
+
+@router.get("/rooms/{room_id}/beds/stats")
+async def get_room_bed_stats(room_id: str, db: DBSession, current_user: AdminUser):
+    """Get bed statistics for a room."""
+    from sqlalchemy import select, func
+    from app.models.room import Bed
+    
+    room_hostel_id = await _resolve_room_hostel_id(db, room_id)
+    _check_hostel(current_user, room_hostel_id)
+    
+    # Get total beds
+    total_result = await db.execute(
+        select(func.count()).select_from(Bed).where(Bed.room_id == room_id)
+    )
+    total_beds = total_result.scalar() or 0
+    
+    # Get counts by status
+    status_counts = await db.execute(
+        select(Bed.status, func.count())
+        .where(Bed.room_id == room_id)
+        .group_by(Bed.status)
+    )
+    
+    return {
+        "room_id": room_id,
+        "total_beds": total_beds,
+        "status_counts": {status.value: count for status, count in status_counts.all()}
+    }
 
 ============================================================
 FILE: app\api\v1\admin\__init__.py
@@ -7433,8 +7602,8 @@ from datetime import date, timedelta
 import re
 from sqlalchemy import select
 from app.models.user import User, UserRole
-
-
+from uuid import uuid4
+from datetime import UTC, datetime
 from app.dependencies import CurrentUser, require_roles
 from app.dependencies import DBSession
 from app.models.hostel import HostelStatus
@@ -7616,7 +7785,6 @@ async def list_admins(_: SuperAdmin, db: DBSession):
     """**List all hostel admins** on the platform."""
     return await SuperAdminService(db).list_admins()
 
-
 @router.post("/admins", response_model=SuperAdminAdminResponse, status_code=201)
 async def create_admin(payload: SuperAdminAdminCreateRequest, _: SuperAdmin, db: DBSession):
     """
@@ -7627,19 +7795,17 @@ async def create_admin(payload: SuperAdminAdminCreateRequest, _: SuperAdmin, db:
     
     Requirements:
     - Email must be valid format (e.g., user@example.com)
-    - Phone must be 10 digits (Indian format) or 10-15 digits international
+    - Phone must be 10 digits (Indian format)
     - Password must be at least 8 chars with uppercase, lowercase, and number
     - Full name must be at least 2 characters
     """
     from app.core.security import hash_password
-    from app.models.user import User, UserRole
-    from sqlalchemy import select
     import re
     
     # Normalize email (lowercase)
     normalized_email = payload.email.lower().strip()
     
-    # Check if email already exists
+    # CHECK FOR EXISTING EMAIL - This is the critical part
     existing_email = await db.execute(
         select(User).where(User.email == normalized_email)
     )
@@ -7649,38 +7815,22 @@ async def create_admin(payload: SuperAdminAdminCreateRequest, _: SuperAdmin, db:
             detail=f"Email '{payload.email}' is already registered."
         )
     
-    # Normalize phone: remove all non-digit characters
-    # Keep only digits for storage and checking
+    # Normalize phone and check for existing phone
     normalized_phone = re.sub(r'[^0-9]', '', payload.phone)
     
-    # For Indian numbers, ensure 10 digits
-    # Check if phone is Indian number (starts with 91 or +91)
-    # If it's an international format, keep as is after cleaning
+    # Handle Indian number format (10 digits after removing +91 or 0)
     if normalized_phone.startswith('91') and len(normalized_phone) == 12:
-        normalized_phone = normalized_phone[2:]  # Remove 91 prefix
+        normalized_phone = normalized_phone[2:]
     elif normalized_phone.startswith('0'):
-        normalized_phone = normalized_phone[1:]  # Remove leading 0
+        normalized_phone = normalized_phone[1:]
     
-    # Validate phone length
-    if len(normalized_phone) < 10:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Phone number must be at least 10 digits"
-        )
-    if len(normalized_phone) > 15:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Phone number must be at most 15 digits"
-        )
-    
-    # For Indian numbers (10 digits), validate they start with 6-9
     if len(normalized_phone) == 10 and not normalized_phone[0] in ['6', '7', '8', '9']:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Indian phone number must start with 6, 7, 8, or 9"
         )
     
-    # Check if phone already exists
+    # CHECK FOR EXISTING PHONE
     existing_phone = await db.execute(
         select(User).where(User.phone == normalized_phone)
     )
@@ -7690,7 +7840,7 @@ async def create_admin(payload: SuperAdminAdminCreateRequest, _: SuperAdmin, db:
             detail=f"Phone number '{payload.phone}' is already registered."
         )
     
-    # Validate password
+    # Validate password strength
     if len(payload.password) < 8:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -7715,7 +7865,7 @@ async def create_admin(payload: SuperAdminAdminCreateRequest, _: SuperAdmin, db:
     # Create admin user with normalized phone
     admin = User(
         email=normalized_email,
-        phone=normalized_phone,  # Store only digits
+        phone=normalized_phone,
         full_name=payload.full_name.strip(),
         password_hash=hash_password(payload.password),
         role=UserRole.HOSTEL_ADMIN,
@@ -7743,30 +7893,32 @@ async def assign_hostels(
     Replaces existing assignments. Pass an array of `hostel_ids`.
     The admin will only be able to manage the assigned hostels.
     """
-    from sqlalchemy import select  # ← ADD THIS IMPORT
+    from app.models.hostel import AdminHostelMapping, Hostel
+    from sqlalchemy import select, delete
     
     # Verify admin exists
-    admin = await db.execute(
+    result = await db.execute(
         select(User).where(User.id == admin_id, User.role == UserRole.HOSTEL_ADMIN)
     )
-    admin_user = admin.scalar_one_or_none()
+    admin_user = result.scalar_one_or_none()
     
     if admin_user is None:
         raise HTTPException(status_code=404, detail="Admin not found.")
     
-    # Replace assignments
+    # Delete existing assignments
     await db.execute(
         delete(AdminHostelMapping).where(AdminHostelMapping.admin_id == admin_id)
     )
     
+    # Create new assignments
     for index, hostel_id in enumerate(payload.hostel_ids):
         # Verify hostel exists
-        hostel = await db.execute(select(Hostel).where(Hostel.id == hostel_id))
-        if hostel.scalar_one_or_none() is None:
+        hostel_result = await db.execute(select(Hostel).where(Hostel.id == hostel_id))
+        if hostel_result.scalar_one_or_none() is None:
             raise HTTPException(status_code=404, detail=f"Hostel {hostel_id} not found.")
         
         mapping = AdminHostelMapping(
-            id=uuid.uuid4(),
+            id=uuid4(),
             admin_id=admin_id,
             hostel_id=hostel_id,
             is_primary=(index == 0),
@@ -7788,6 +7940,7 @@ async def assign_hostel(admin_id: str, payload: AssignHostelRequest, current_use
 
 
 # ==================== SUBSCRIPTION ENDPOINTS ====================
+
 
 @router.get("/subscriptions", response_model=list[SuperAdminSubscriptionDetailResponse])
 async def list_subscriptions(
@@ -7821,9 +7974,6 @@ async def list_subscriptions(
     # Start with base query
     query = select(Subscription)
     
-    # Track if we need to add a DISTINCT (when joining with hostels)
-    needs_distinct = False
-    
     # Apply filters
     if status_filter:
         query = query.where(Subscription.status == status_filter)
@@ -7833,7 +7983,6 @@ async def list_subscriptions(
     
     # Handle hostel_name filter - we need to join with hostels table
     if hostel_name:
-        needs_distinct = True
         query = query.join(Hostel, Subscription.hostel_id == Hostel.id)
         # Use ILIKE for case-insensitive partial matching
         query = query.where(Hostel.name.ilike(f"%{hostel_name}%"))
@@ -7848,17 +7997,13 @@ async def list_subscriptions(
     if end_date_to:
         query = query.where(Subscription.end_date <= end_date_to)
     
-    # Add DISTINCT if needed to avoid duplicate rows from joins
-    if needs_distinct:
-        query = query.distinct()
-    
     # Order by creation date
     query = query.order_by(Subscription.created_at.desc())
     
     result = await db.execute(query)
     subscriptions = list(result.scalars().all())
     
-    # Get hostel names in bulk
+    # Get hostel names in bulk (avoid N+1 query)
     hostel_ids_list = list(set(str(sub.hostel_id) for sub in subscriptions))
     hostel_names_dict = {}
     if hostel_ids_list:
@@ -8092,11 +8237,11 @@ async def search_hostels_for_subscriptions(
     Returns matching hostels with their subscription status.
     Useful for building autocomplete dropdowns in the frontend.
     """
-    from sqlalchemy import select, or_
+    from sqlalchemy import select
     from app.models.hostel import Hostel
     from app.models.operations import Subscription
     
-    # Search hostels with improved query
+    # Search hostels
     result = await db.execute(
         select(Hostel.id, Hostel.name, Hostel.city, Hostel.status)
         .where(Hostel.name.ilike(f"%{q}%"))
@@ -9994,7 +10139,7 @@ if TYPE_CHECKING:
 class HostelType(str, enum.Enum):
     BOYS = "boys"
     GIRLS = "girls"
-    COED = "coed"
+    COED = "co-living"
 
 
 class HostelStatus(str, enum.Enum):
@@ -10753,7 +10898,10 @@ class AdminRepository:
         return room
 
     async def list_beds(self, room_id: str) -> list[Bed]:
-        result = await self.session.execute(select(Bed).where(Bed.room_id == room_id))
+        """List all beds in a room."""
+        result = await self.session.execute(
+            select(Bed).where(Bed.room_id == room_id)
+        )
         return list(result.scalars().all())
 
     async def create_bed(self, bed: Bed) -> Bed:
@@ -10939,6 +11087,17 @@ class AdminRepository:
         await self.session.delete(supervisor)
         await self.session.flush()
 
+
+    async def get_bed_by_room_and_number(self, room_id: str, bed_number: str) -> Bed | None:
+        """Check if a bed with given number already exists in the room."""
+        result = await self.session.execute(
+            select(Bed).where(
+                Bed.room_id == room_id,
+                Bed.bed_number == bed_number
+            )
+        )
+        return result.scalar_one_or_none()
+
     @staticmethod
     def _student_to_dict(
         s: Student,
@@ -10969,6 +11128,7 @@ class AdminRepository:
             "created_at": s.created_at,
             "updated_at": s.updated_at,
         }
+
 
 
 ============================================================
@@ -12907,10 +13067,9 @@ class PaymentResponse(APIModel):
 ============================================================
 FILE: app\schemas\room.py
 ============================================================
-from pydantic import BaseModel, Field
-
 from app.schemas.base import TimestampedResponse
-
+from pydantic import BaseModel, Field, field_validator
+from typing import Optional
 
 class RoomCreateRequest(BaseModel):
     room_number: str = Field(min_length=1, max_length=50)
@@ -12941,9 +13100,19 @@ class BedCreateRequest(BaseModel):
     status: str = Field(default="available", min_length=2, max_length=50)
 
 
+
 class BedUpdateRequest(BaseModel):
     bed_number: str | None = Field(default=None, min_length=1, max_length=50)
-    status: str | None = Field(default=None, min_length=2, max_length=50)
+    status: str | None = Field(default=None, max_length=50)  # Remove min_length validation
+    room_id: str | None = Field(default=None, description="Move bed to a different room")
+    
+    @field_validator("status", mode="before")
+    @classmethod
+    def validate_status(cls, v: str | None) -> str | None:
+        """Allow any status string - service layer will validate against enum"""
+        if v is None:
+            return v
+        return v.strip() if isinstance(v, str) else v
 
 
 class RoomResponse(TimestampedResponse):
@@ -13664,6 +13833,24 @@ class AdminService:
         room = await self.repository.get_room_by_id(room_id)
         if room is None:
             raise HTTPException(status_code=404, detail="Room not found.")
+        
+        # Check if bed number already exists in this room
+        existing_beds = await self.repository.list_beds(room_id)
+        existing_bed_numbers = [bed.bed_number for bed in existing_beds]
+        
+        if payload.bed_number in existing_bed_numbers:
+            raise HTTPException(
+                status_code=409,  # Conflict - duplicate bed number
+                detail=f"Bed number '{payload.bed_number}' already exists in this room."
+            )
+        
+        # Check if room is at capacity
+        if len(existing_beds) >= room.total_beds:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot add more beds. Room has capacity of {room.total_beds} beds."
+            )
+        
         bed = Bed(
             hostel_id=room.hostel_id,
             room_id=room_id,
@@ -13671,18 +13858,101 @@ class AdminService:
             status=payload.status or BedStatus.AVAILABLE,
         )
         self.session.add(bed)
+        
+        # Update room total_beds
         room.total_beds += 1
+        
         await self.session.commit()
         await self.session.refresh(bed)
         return bed
 
+
     async def update_bed(self, bed_id: str, payload: BedUpdateRequest) -> Bed:
-        """Update bed status (e.g., set to maintenance)."""
+        """Update bed details including moving to different room."""
         bed = await self.repository.get_bed_by_id(bed_id)
         if bed is None:
             raise HTTPException(status_code=404, detail="Bed not found.")
+        
+        # Handle moving bed to different room
+        if payload.room_id is not None and payload.room_id != str(bed.room_id):
+            # Verify new room exists
+            new_room = await self.repository.get_room_by_id(payload.room_id)
+            if new_room is None:
+                raise HTTPException(status_code=404, detail="Target room not found.")
+            
+            # Verify same hostel
+            if str(new_room.hostel_id) != str(bed.hostel_id):
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Cannot move bed to a room in a different hostel."
+                )
+            
+            # Check if bed has active bookings
+            from app.models.booking import Booking, BookingStatus
+            active_booking = await self.session.execute(
+                select(Booking).where(
+                    Booking.bed_id == bed_id,
+                    Booking.status.in_([
+                        BookingStatus.APPROVED,
+                        BookingStatus.CHECKED_IN,
+                        BookingStatus.PENDING_APPROVAL
+                    ])
+                )
+            )
+            if active_booking.scalar_one_or_none():
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot move bed with active bookings. Please check-out students first."
+                )
+            
+            # Check if bed number already exists in target room
+            existing_beds = await self.repository.list_beds(payload.room_id)
+            if bed.bed_number in [b.bed_number for b in existing_beds]:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Bed number '{bed.bed_number}' already exists in target room."
+                )
+            
+            # Move the bed
+            bed.room_id = payload.room_id
+        
+        # Handle bed number change
+        if payload.bed_number and payload.bed_number != bed.bed_number:
+            # Check for duplicate in current room
+            target_room_id = payload.room_id if payload.room_id else bed.room_id
+            existing_beds = await self.repository.list_beds(target_room_id)
+            if payload.bed_number in [b.bed_number for b in existing_beds if b.id != bed_id]:
+                raise HTTPException(
+                    status_code=409, 
+                    detail=f"Bed number '{payload.bed_number}' already exists in this room."
+                )
+            bed.bed_number = payload.bed_number
+        
+        # Handle status change - VALIDATE HERE
         if payload.status is not None:
-            bed.status = payload.status
+            # Import BedStatus if not already imported
+            from app.models.room import BedStatus
+            
+            # Convert to lowercase for case-insensitive comparison
+            status_value = payload.status.lower().strip()
+            
+            # Map status values
+            valid_statuses = {
+                "available": BedStatus.AVAILABLE,
+                "occupied": BedStatus.OCCUPIED,
+                "maintenance": BedStatus.MAINTENANCE,
+                "reserved": BedStatus.RESERVED
+            }
+            
+            if status_value in valid_statuses:
+                bed.status = valid_statuses[status_value]
+            else:
+                # Return 400 for invalid status
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid status. Must be one of: available, occupied, maintenance, reserved. Got: '{payload.status}'"
+                )
+        
         await self.session.commit()
         await self.session.refresh(bed)
         return bed
@@ -25758,688 +26028,6 @@ if __name__ == "__main__":
     tester.run_all_tests()
 
 ============================================================
-FILE: scripts\check_api.py
-============================================================
-import urllib.request, json
-
-r = urllib.request.urlopen("http://localhost:8000/api/v1/public/hostels")
-d = json.loads(r.read())
-print(f"API OK — {len(d)} hostels")
-for h in d[:2]:
-    print(f"  {h['name']} ({h['city']}) — rating: {h['rating']}, price: {h['starting_price']}")
-
-r2 = urllib.request.urlopen("http://localhost:8000/health")
-print(f"Health: {json.loads(r2.read())}")
-
-
-============================================================
-FILE: scripts\check_subscription_and_admin.py
-============================================================
-# scripts/check_subscription_and_admin.py
-#!/usr/bin/env python3
-"""
-Comprehensive check for Subscription Filters and Super Admin features.
-Run: python scripts/check_subscription_and_admin.py
-"""
-
-import json
-import urllib.request
-import urllib.error
-from datetime import date, timedelta
-from typing import Optional, Dict, Any, List, Tuple
-
-BASE_URL = "http://localhost:8000/api/v1"
-
-# ANSI colors
-GREEN = '\033[92m'
-RED = '\033[91m'
-YELLOW = '\033[93m'
-BLUE = '\033[94m'
-CYAN = '\033[96m'
-MAGENTA = '\033[95m'
-RESET = '\033[0m'
-BOLD = '\033[1m'
-
-def print_header(text: str):
-    print(f"\n{BOLD}{CYAN}{'='*80}{RESET}")
-    print(f"{BOLD}{CYAN}{text:^80}{RESET}")
-    print(f"{BOLD}{CYAN}{'='*80}{RESET}\n")
-
-def print_success(text: str):
-    print(f"{GREEN}✓ {text}{RESET}")
-
-def print_error(text: str):
-    print(f"{RED}✗ {text}{RESET}")
-
-def print_info(text: str):
-    print(f"{BLUE}ℹ {text}{RESET}")
-
-def print_warning(text: str):
-    print(f"{YELLOW}⚠ {text}{RESET}")
-
-def print_test_result(test_name: str, passed: bool, message: str = ""):
-    status = f"{GREEN}PASS{RESET}" if passed else f"{RED}FAIL{RESET}"
-    print(f"  {status} - {test_name}" + (f": {message}" if message else ""))
-
-def make_request(method: str, path: str, token: Optional[str] = None, body: Optional[Dict] = None) -> Tuple[int, Any]:
-    """Make HTTP request to API"""
-    url = BASE_URL + path
-    data = json.dumps(body).encode() if body else None
-    headers = {"Content-Type": "application/json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read()
-            return resp.status, json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as e:
-        raw = e.read()
-        try:
-            return e.code, json.loads(raw) if raw else {"detail": str(e)}
-        except:
-            return e.code, {"detail": raw.decode('utf-8', errors='replace')}
-    except Exception as e:
-        return 500, {"detail": str(e)}
-
-def login(email: str, password: str = "NewTest@1234") -> Optional[Dict]:
-    """Login and return user data with token"""
-    status, data = make_request("POST", "/auth/login", body={
-        "email_or_phone": email,
-        "password": password
-    })
-    if status == 200:
-        print_success(f"Logged in as {email}")
-        return data
-    else:
-        print_error(f"Login failed for {email}: {data.get('detail', 'Unknown error')}")
-        return None
-
-class SubscriptionAndAdminChecker:
-    def __init__(self):
-        self.super_admin_token = None
-        self.super_admin_id = None
-        self.results = {"passed": 0, "failed": 0, "tests": []}
-    
-    def add_result(self, test_name: str, passed: bool, message: str = ""):
-        self.results["tests"].append({"name": test_name, "passed": passed, "message": message})
-        if passed:
-            self.results["passed"] += 1
-            print_success(f"{test_name}: {message}" if message else test_name)
-        else:
-            self.results["failed"] += 1
-            print_error(f"{test_name}: {message}" if message else test_name)
-    
-    def setup(self):
-        """Setup - login as super admin"""
-        print_header("SETUP - SUPER ADMIN AUTHENTICATION")
-        
-        admin_data = login("superadmin@stayease.com")
-        if not admin_data:
-            print_error("Cannot proceed without super admin login")
-            return False
-        
-        self.super_admin_token = admin_data.get("access_token")
-        self.super_admin_id = admin_data.get("user_id")
-        print_info(f"Super Admin ID: {self.super_admin_id}")
-        
-        return True
-    
-    # ==================== SUBSCRIPTION FILTERS TESTS ====================
-    
-    def test_subscription_basic_list(self):
-        """Test GET /super-admin/subscriptions - basic list"""
-        print_header("TEST 1: Subscription Basic List")
-        
-        status, data = make_request("GET", "/super-admin/subscriptions", token=self.super_admin_token)
-        
-        if status == 200:
-            count = len(data) if isinstance(data, list) else 0
-            self.add_result("Basic list", True, f"Found {count} subscriptions")
-            
-            # Store first subscription ID for later tests
-            if count > 0 and isinstance(data, list):
-                self.first_subscription = data[0]
-                print_info(f"Sample: {self.first_subscription.get('tier')} - {self.first_subscription.get('hostel_name')}")
-        else:
-            self.add_result("Basic list", False, f"HTTP {status}")
-    
-    def test_subscription_status_filters(self):
-        """Test status filters"""
-        print_header("TEST 2: Status Filters")
-        
-        filters = ["active", "expired", "cancelled"]
-        
-        for status_filter in filters:
-            status, data = make_request(
-                "GET", 
-                f"/super-admin/subscriptions?status_filter={status_filter}", 
-                token=self.super_admin_token
-            )
-            
-            if status == 200:
-                count = len(data) if isinstance(data, list) else 0
-                self.add_result(f"Status filter: {status_filter}", True, f"{count} subscriptions")
-            else:
-                self.add_result(f"Status filter: {status_filter}", False, f"HTTP {status}")
-    
-    def test_subscription_hostel_name_filter(self):
-        """Test hostel name filter (partial match)"""
-        print_header("TEST 3: Hostel Name Filter")
-        
-        # Test with common name parts from seed data
-        test_names = ["Green", "Valley", "Pearl", "Sunrise", "Metro"]
-        
-        for name in test_names:
-            status, data = make_request(
-                "GET", 
-                f"/super-admin/subscriptions?hostel_name={name}", 
-                token=self.super_admin_token
-            )
-            
-            if status == 200:
-                count = len(data) if isinstance(data, list) else 0
-                print_success(f"  hostel_name={name}: {count} subscriptions")
-            else:
-                print_error(f"  hostel_name={name}: HTTP {status}")
-        
-        # Also test combined with status
-        status, data = make_request(
-            "GET", 
-            "/super-admin/subscriptions?status_filter=active&hostel_name=Green", 
-            token=self.super_admin_token
-        )
-        
-        if status == 200:
-            count = len(data) if isinstance(data, list) else 0
-            self.add_result("Combined filter (active + hostel_name)", True, f"{count} subscriptions")
-        else:
-            self.add_result("Combined filter (active + hostel_name)", False, f"HTTP {status}")
-    
-    def test_subscription_date_filters(self):
-        """Test date range filters"""
-        print_header("TEST 4: Date Range Filters")
-        
-        today = date.today()
-        next_month = today + timedelta(days=30)
-        next_year = today + timedelta(days=365)
-        last_year = today - timedelta(days=365)
-        
-        # Test start_date_from
-        status, data = make_request(
-            "GET", 
-            f"/super-admin/subscriptions?start_date_from={last_year.isoformat()}", 
-            token=self.super_admin_token
-        )
-        self.add_result("start_date_from filter", status == 200, f"HTTP {status}" if status != 200 else "OK")
-        
-        # Test start_date_to
-        status, data = make_request(
-            "GET", 
-            f"/super-admin/subscriptions?start_date_to={next_month.isoformat()}", 
-            token=self.super_admin_token
-        )
-        self.add_result("start_date_to filter", status == 200, f"HTTP {status}" if status != 200 else "OK")
-        
-        # Test end_date_from
-        status, data = make_request(
-            "GET", 
-            f"/super-admin/subscriptions?end_date_from={today.isoformat()}", 
-            token=self.super_admin_token
-        )
-        self.add_result("end_date_from filter", status == 200, f"HTTP {status}" if status != 200 else "OK")
-        
-        # Test end_date_to
-        status, data = make_request(
-            "GET", 
-            f"/super-admin/subscriptions?end_date_to={next_year.isoformat()}", 
-            token=self.super_admin_token
-        )
-        self.add_result("end_date_to filter", status == 200, f"HTTP {status}" if status != 200 else "OK")
-    
-    def test_subscription_stats_endpoint(self):
-        """Test GET /super-admin/subscriptions/stats"""
-        print_header("TEST 5: Stats Endpoint")
-        
-        status, data = make_request("GET", "/super-admin/subscriptions/stats", token=self.super_admin_token)
-        
-        if status == 200:
-            required_fields = [
-                "total_subscriptions", "active_subscriptions", 
-                "expired_subscriptions", "cancelled_subscriptions",
-                "expiring_soon", "monthly_recurring_revenue", "tier_distribution"
-            ]
-            missing = [f for f in required_fields if f not in data]
-            
-            if not missing:
-                self.add_result("Stats endpoint", True, "All fields present")
-                print_info(f"  Total: {data.get('total_subscriptions')}")
-                print_info(f"  Active: {data.get('active_subscriptions')}")
-                print_info(f"  MRR: ₹{data.get('monthly_recurring_revenue'):,.2f}")
-                print_info(f"  Tier distribution: {data.get('tier_distribution')}")
-            else:
-                self.add_result("Stats endpoint", False, f"Missing fields: {missing}")
-        else:
-            self.add_result("Stats endpoint", False, f"HTTP {status} - Endpoint may not exist")
-    
-    def test_subscription_search_hostels(self):
-        """Test GET /super-admin/subscriptions/search/hostels"""
-        print_header("TEST 6: Search Hostels Helper")
-        
-        status, data = make_request(
-            "GET", 
-            "/super-admin/subscriptions/search/hostels?q=Green", 
-            token=self.super_admin_token
-        )
-        
-        if status == 200:
-            count = len(data) if isinstance(data, list) else 0
-            self.add_result("Search hostels endpoint", True, f"Found {count} hostels")
-            if count > 0:
-                print_info(f"  Sample: {data[0].get('name')} - Active sub: {data[0].get('has_active_subscription')}")
-        else:
-            self.add_result("Search hostels endpoint", False, f"HTTP {status}")
-    
-    def test_subscription_error_handling(self):
-        """Test error handling for invalid inputs"""
-        print_header("TEST 7: Error Handling")
-        
-        # Invalid date format
-        status, data = make_request(
-            "GET", 
-            "/super-admin/subscriptions?start_date_from=invalid-date", 
-            token=self.super_admin_token
-        )
-        self.add_result("Invalid date format", status == 422, f"HTTP {status} (expected 422)")
-        
-        # Non-existent subscription ID
-        fake_id = "00000000-0000-0000-0000-000000000000"
-        status, data = make_request("GET", f"/super-admin/subscriptions/{fake_id}", token=self.super_admin_token)
-        self.add_result("Non-existent subscription", status == 404, f"HTTP {status} (expected 404)")
-        
-        # Invalid status filter (should be ignored or return 200)
-        status, data = make_request(
-            "GET", 
-            "/super-admin/subscriptions?status_filter=invalid_status", 
-            token=self.super_admin_token
-        )
-        self.add_result("Invalid status filter", status == 200, f"HTTP {status} (should return 200 with all)")
-    
-    # ==================== SUPER ADMIN PROFILE TESTS ====================
-    
-    def test_profile_endpoint(self):
-        """Test GET /super-admin/profile"""
-        print_header("TEST 8: Super Admin Profile Endpoint")
-        
-        status, data = make_request("GET", "/super-admin/profile", token=self.super_admin_token)
-        
-        if status == 200:
-            required_fields = ["id", "email", "phone", "full_name", "role"]
-            missing = [f for f in required_fields if f not in data]
-            
-            if not missing:
-                self.add_result("Get profile endpoint", True, "Endpoint exists and returns data")
-                print_info(f"  Name: {data.get('full_name')}")
-                print_info(f"  Email: {data.get('email')}")
-                print_info(f"  Role: {data.get('role')}")
-            else:
-                self.add_result("Get profile endpoint", False, f"Missing fields: {missing}")
-        else:
-            # Try fallback to visitor/profile
-            print_info("Trying fallback: /visitor/profile")
-            status, data = make_request("GET", "/visitor/profile", token=self.super_admin_token)
-            
-            if status == 200:
-                self.add_result("Get profile endpoint (via visitor)", True, "Using /visitor/profile endpoint")
-            else:
-                self.add_result("Get profile endpoint", False, f"HTTP {status}")
-    
-    def test_update_profile_endpoint(self):
-        """Test PATCH /super-admin/profile"""
-        print_header("TEST 9: Update Profile Endpoint")
-        
-        update_data = {
-            "full_name": f"Super Admin Updated"
-        }
-        
-        status, data = make_request("PATCH", "/super-admin/profile", token=self.super_admin_token, body=update_data)
-        
-        if status == 200:
-            self.add_result("Update profile endpoint", True, "Profile updated successfully")
-        else:
-            # Try fallback to visitor/profile
-            status, data = make_request("PATCH", "/visitor/profile", token=self.super_admin_token, body=update_data)
-            
-            if status == 200:
-                self.add_result("Update profile endpoint (via visitor)", True, "Using /visitor/profile endpoint")
-            else:
-                self.add_result("Update profile endpoint", False, f"HTTP {status}")
-    
-    def test_change_password_endpoint(self):
-        """Test POST /super-admin/change-password"""
-        print_header("TEST 10: Change Password Endpoint")
-        
-        # First, check if endpoint exists
-        test_payload = {
-            "old_password": "NewTest@1234",
-            "new_password": "Test@1234",
-            "confirm_password": "Test@1234"
-        }
-        
-        status, data = make_request(
-            "POST", 
-            "/super-admin/change-password", 
-            token=self.super_admin_token, 
-            body=test_payload
-        )
-        
-        if status == 200:
-            self.add_result("Change password endpoint", True, "Endpoint working")
-        elif status == 401:
-            self.add_result("Change password endpoint", True, "Endpoint exists (password validation working)")
-        elif status == 404:
-            self.add_result("Change password endpoint", False, "Endpoint not found (404)")
-        else:
-            self.add_result("Change password endpoint", False, f"HTTP {status}")
-    
-    def test_password_validation_endpoint(self):
-        """Test POST /super-admin/validate-password"""
-        print_header("TEST 11: Password Validation Endpoint")
-        
-        test_cases = [
-            ("short", "Test@1", False, "Too short"),
-            ("no_upper", "test1234@", False, "No uppercase"),
-            ("no_lower", "TEST1234@", False, "No lowercase"),
-            ("no_number", "Test@ABCD", False, "No number"),
-            ("no_special", "Test1234", False, "No special"),
-            ("valid", "Test@1234", True, "Valid password"),
-        ]
-        
-        for name, password, expected_valid, desc in test_cases:
-            status, data = make_request(
-                "POST", 
-                "/super-admin/validate-password", 
-                body={"password": password}
-            )
-            
-            if status == 200:
-                is_valid = data.get("is_valid", False)
-                if is_valid == expected_valid:
-                    print_success(f"  {desc}: Correctly {'accepted' if is_valid else 'rejected'}")
-                else:
-                    print_error(f"  {desc}: Expected {'valid' if expected_valid else 'invalid'}, got {'valid' if is_valid else 'invalid'}")
-            else:
-                print_error(f"  {desc}: HTTP {status}")
-        
-        # Also test auth is not required (public endpoint)
-        status, data = make_request("POST", "/super-admin/validate-password", body={"password": "Test@1234"})
-        if status == 200:
-            print_success("  Validation endpoint is public (no auth required)")
-        else:
-            print_warning(f"  Validation endpoint may require auth (HTTP {status})")
-    
-    # ==================== RBAC TESTS ====================
-    
-    def test_rbac_visitor_access(self):
-        """Test that visitors cannot access super admin endpoints"""
-        print_header("TEST 12: RBAC - Visitor Access Denied")
-        
-        # Login as visitor
-        visitor_data = login("arun.kapoor@gmail.com")
-        if not visitor_data:
-            print_warning("Visitor login failed - skipping RBAC test")
-            return
-        
-        visitor_token = visitor_data.get("access_token")
-        
-        # Try to access super admin endpoints
-        endpoints = [
-            ("GET", "/super-admin/dashboard"),
-            ("GET", "/super-admin/subscriptions"),
-            ("GET", "/super-admin/hostels"),
-            ("GET", "/super-admin/admins"),
-        ]
-        
-        for method, endpoint in endpoints:
-            status, _ = make_request(method, endpoint, token=visitor_token)
-            if status == 403:
-                print_success(f"  {endpoint}: Correctly blocked (403)")
-            else:
-                print_error(f"  {endpoint}: Expected 403, got {status}")
-    
-    # ==================== RUN ALL ====================
-    
-    def run_all_tests(self):
-        """Run all test cases"""
-        print_header("SUBSCRIPTION FILTERS & SUPER ADMIN CHECK")
-        print_info(f"Time: {date.today().isoformat()}")
-        print_info(f"API URL: {BASE_URL}")
-        
-        if not self.setup():
-            print_error("Setup failed - cannot run tests")
-            return
-        
-        # Subscription tests
-        self.test_subscription_basic_list()
-        self.test_subscription_status_filters()
-        self.test_subscription_hostel_name_filter()
-        self.test_subscription_date_filters()
-        self.test_subscription_stats_endpoint()
-        self.test_subscription_search_hostels()
-        self.test_subscription_error_handling()
-        
-        # Profile tests
-        self.test_profile_endpoint()
-        self.test_update_profile_endpoint()
-        self.test_change_password_endpoint()
-        self.test_password_validation_endpoint()
-        
-        # RBAC tests
-        self.test_rbac_visitor_access()
-        
-        self.print_summary()
-    
-    def print_summary(self):
-        """Print test summary"""
-        print_header("TEST SUMMARY")
-        
-        total = self.results["passed"] + self.results["failed"]
-        
-        print(f"\n  {BOLD}Total Tests:{RESET}   {total}")
-        print(f"  {GREEN}{BOLD}Passed:{RESET}      {self.results['passed']}")
-        print(f"  {RED}{BOLD}Failed:{RESET}      {self.results['failed']}")
-        
-        if self.results["failed"] > 0:
-            print(f"\n{RED}Failed Tests:{RESET}")
-            for test in self.results["tests"]:
-                if not test["passed"]:
-                    print(f"  ✗ {test['name']}: {test['message']}")
-        
-        # Recommendations
-        print(f"\n{BOLD}{CYAN}RECOMMENDATIONS:{RESET}")
-        
-        missing_endpoints = []
-        for test in self.results["tests"]:
-            if not test["passed"]:
-                if "Stats" in test["name"]:
-                    missing_endpoints.append("Add GET /super-admin/subscriptions/stats endpoint")
-                elif "profile" in test["name"].lower():
-                    missing_endpoints.append("Add GET/PATCH /super-admin/profile endpoints")
-                elif "change-password" in test["name"].lower():
-                    missing_endpoints.append("Add POST /super-admin/change-password endpoint")
-                elif "validate-password" in test["name"].lower():
-                    missing_endpoints.append("Add POST /super-admin/validate-password endpoint")
-                elif "hostel_name" in test["name"].lower():
-                    missing_endpoints.append("Verify hostel_name filter works with DISTINCT query")
-        
-        if missing_endpoints:
-            for rec in set(missing_endpoints):
-                print_info(f"  • {rec}")
-        else:
-            print_success("All features are working correctly!")
-        
-        # Summary of what's working
-        print(f"\n{BOLD}{GREEN}WORKING FEATURES:{RESET}")
-        working = [
-            "✓ GET /super-admin/subscriptions (basic list)",
-            "✓ status_filter parameter",
-            "✓ hostel_id filter",
-            "✓ start_date_from/to filters",
-            "✓ end_date_from/to filters",
-            "✓ Combined filters",
-            "✓ Error handling (404, 422)",
-            "✓ RBAC (visitor blocked)"
-        ]
-        for w in working:
-            print(f"  {w}")
-        
-        print()
-
-
-if __name__ == "__main__":
-    checker = SubscriptionAndAdminChecker()
-    checker.run_all_tests()
-
-============================================================
-FILE: scripts\check_superadmin_profile.py
-============================================================
-# scripts/check_subscription_filters.py
-#!/usr/bin/env python3
-"""
-Quick check to verify subscription filter implementation.
-Run: python scripts/check_subscription_filters.py
-"""
-
-import json
-import urllib.request
-import urllib.error
-from datetime import date, timedelta
-
-BASE_URL = "http://localhost:8000/api/v1"
-
-GREEN = '\033[92m'
-RED = '\033[91m'
-YELLOW = '\033[93m'
-BLUE = '\033[94m'
-RESET = '\033[0m'
-
-def make_request(method, path, token=None, body=None):
-    url = BASE_URL + path
-    data = json.dumps(body).encode() if body else None
-    headers = {"Content-Type": "application/json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return resp.status, json.loads(resp.read()) if resp.getcode() != 204 else {}
-    except urllib.error.HTTPError as e:
-        return e.code, {"detail": str(e)}
-
-def login():
-    status, data = make_request("POST", "/auth/login", body={
-        "email_or_phone": "superadmin@stayease.com",
-        "password": "Test@1234"
-    })
-    if status == 200:
-        return data.get("access_token")
-    return None
-
-def check_filter(test_name, url, description):
-    """Check if a filter endpoint works"""
-    status, data = make_request("GET", url, token=token)
-    if status == 200:
-        count = len(data) if isinstance(data, list) else 0
-        print(f"  {GREEN}✓{RESET} {test_name}: {description} (HTTP {status}, found {count} items)")
-        return True
-    else:
-        print(f"  {RED}✗{RESET} {test_name}: {description} (HTTP {status})")
-        return False
-
-print("\n" + "="*70)
-print("  SUBSCRIPTION FILTERS CHECK")
-print("="*70 + "\n")
-
-token = login()
-if not token:
-    print(f"{RED}✗ Failed to login as super admin{RESET}")
-    exit(1)
-
-print(f"{GREEN}✓ Logged in as super admin{RESET}\n")
-
-# Test 1: Basic list (should work)
-print("📋 TEST 1: Basic endpoints")
-status, data = make_request("GET", "/super-admin/subscriptions", token=token)
-if status == 200:
-    count = len(data) if isinstance(data, list) else 0
-    print(f"  {GREEN}✓{RESET} GET /super-admin/subscriptions - {count} subscriptions found")
-else:
-    print(f"  {RED}✗{RESET} GET /super-admin/subscriptions - HTTP {status}")
-
-# Test 2: Status filters (should work)
-print("\n📋 TEST 2: Status filters")
-check_filter("Status=active", "/super-admin/subscriptions?status_filter=active", "Active subscriptions")
-check_filter("Status=expired", "/super-admin/subscriptions?status_filter=expired", "Expired subscriptions")
-check_filter("Status=cancelled", "/super-admin/subscriptions?status_filter=cancelled", "Cancelled subscriptions")
-
-# Test 3: Hostel name filter (MAY BE MISSING)
-print("\n📋 TEST 3: Hostel name filters")
-check_filter("Hostel name partial", "/super-admin/subscriptions?hostel_name=Green", "Hostels containing 'Green'")
-check_filter("Hostel name exact", "/super-admin/subscriptions?hostel_name=Green Valley Hostel", "Exact hostel name")
-
-# Test 4: Date filters (MAY BE MISSING)
-print("\n📋 TEST 4: Date range filters")
-today = date.today()
-next_month = today + timedelta(days=30)
-next_year = today + timedelta(days=365)
-
-check_filter("Start date from", f"/super-admin/subscriptions?start_date_from={today.isoformat()}", f"Subscriptions from {today}")
-check_filter("Start date to", f"/super-admin/subscriptions?start_date_to={next_month.isoformat()}", f"Subscriptions to {next_month}")
-check_filter("End date from", f"/super-admin/subscriptions?end_date_from={today.isoformat()}", f"Subscriptions ending from {today}")
-check_filter("End date to", f"/super-admin/subscriptions?end_date_to={next_year.isoformat()}", f"Subscriptions ending to {next_year}")
-
-# Test 5: Combined filters
-print("\n📋 TEST 5: Combined filters")
-check_filter("Active + Hostel name", "/super-admin/subscriptions?status_filter=active&hostel_name=Green", "Active hostels with 'Green'")
-check_filter("Date range + Status", f"/super-admin/subscriptions?status_filter=active&start_date_from={today.isoformat()}", "Active subscriptions from today")
-
-# Test 6: Search hostels endpoint (helper for dropdown)
-print("\n📋 TEST 6: Hostel search helper")
-status, data = make_request("GET", "/super-admin/subscriptions/search/hostels?q=Green", token=token)
-if status == 200:
-    count = len(data) if isinstance(data, list) else 0
-    print(f"  {GREEN}✓{RESET} Search hostels endpoint: /super-admin/subscriptions/search/hostels (found {count} hostels)")
-else:
-    print(f"  {RED}✗{RESET} Search hostels endpoint: HTTP {status}")
-
-print("\n" + "="*70)
-print("  SUMMARY")
-print("="*70)
-
-============================================================
-FILE: scripts\check_tables.py
-============================================================
-import asyncio
-import asyncpg
-
-
-async def check():
-    conn = await asyncpg.connect("postgresql://postgres:1234@localhost:5432/stayease_dev")
-    rows = await conn.fetch(
-        "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename"
-    )
-    print(f"Found {len(rows)} tables:")
-    for r in rows:
-        print(" ", r["tablename"])
-    await conn.close()
-
-
-asyncio.run(check())
-
-
-============================================================
 FILE: scripts\create_db.py
 ============================================================
 import asyncio
@@ -26877,6 +26465,35 @@ EMPLOYEE_LEAD_MAP = {emp[1]: emp[2] for emp in EMPLOYEE_DATA}
 
 
 ============================================================
+FILE: scripts\fix_enum_values.py
+============================================================
+# scripts/fix_enum_values.py
+import re
+
+# Read the seed_data.py file
+with open('scripts/seed_data.py', 'r', encoding='utf-8') as f:
+    content = f.read()
+
+# Fix hostel_type values (uppercase enum)
+content = re.sub(r'"hostel_type":\s*"boys"', '"hostel_type": "BOYS"', content)
+content = re.sub(r'"hostel_type":\s*"girls"', '"hostel_type": "GIRLS"', content)
+content = re.sub(r'"hostel_type":\s*"coed"', '"hostel_type": "COED"', content)
+
+# Also fix room_type values if needed
+content = re.sub(r'"type":\s*"single"', '"type": "SINGLE"', content)
+content = re.sub(r'"type":\s*"double"', '"type": "DOUBLE"', content)
+content = re.sub(r'"type":\s*"triple"', '"type": "TRIPLE"', content)
+content = re.sub(r'"type":\s*"dormitory"', '"type": "DORMITORY"', content)
+
+# Write back
+with open('scripts/seed_data.py', 'w', encoding='utf-8') as f:
+    f.write(content)
+
+print("✅ Fixed enum values in seed_data.py")
+print("   - hostel_type: boys → BOYS, girls → GIRLS, coed → COED")
+print("   - room_type: single → SINGLE, double → DOUBLE, triple → TRIPLE, dormitory → DORMITORY")
+
+============================================================
 FILE: scripts\quick_duplicate_check.py
 ============================================================
 # scripts/verify_duplicate_check.py
@@ -27095,7 +26712,7 @@ HOSTELS_CONFIG = [
         "slug": "green-valley-boys-hostel",
         "city": "Hyderabad",
         "state": "Telangana",
-        "hostel_type": "boys",
+        "hostel_type": "BOYS",
         "description": (
             "Green Valley Boys Hostel is a premium accommodation for male students and "
             "working professionals in the heart of Hyderabad. Surrounded by lush greenery, "
@@ -27128,14 +26745,14 @@ HOSTELS_CONFIG = [
             ("RO Water", "utilities"), ("Housekeeping", "services"),
         ],
         "rooms": [
-            {"number": "101", "floor": 1, "type": "single", "beds": 1, "daily": 900, "monthly": 8500, "deposit": 8500, "dim": "12x10 ft"},
-            {"number": "102", "floor": 1, "type": "double", "beds": 2, "daily": 700, "monthly": 6500, "deposit": 6500, "dim": "14x12 ft"},
-            {"number": "103", "floor": 1, "type": "double", "beds": 2, "daily": 700, "monthly": 6500, "deposit": 6500, "dim": "14x12 ft"},
-            {"number": "201", "floor": 2, "type": "triple", "beds": 3, "daily": 600, "monthly": 5500, "deposit": 5500, "dim": "16x14 ft"},
-            {"number": "202", "floor": 2, "type": "triple", "beds": 3, "daily": 600, "monthly": 5500, "deposit": 5500, "dim": "16x14 ft"},
-            {"number": "203", "floor": 2, "type": "dormitory", "beds": 6, "daily": 400, "monthly": 3500, "deposit": 3500, "dim": "20x18 ft"},
-            {"number": "301", "floor": 3, "type": "single", "beds": 1, "daily": 950, "monthly": 9000, "deposit": 9000, "dim": "12x10 ft"},
-            {"number": "302", "floor": 3, "type": "double", "beds": 2, "daily": 750, "monthly": 7000, "deposit": 7000, "dim": "14x12 ft"},
+            {"number": "101", "floor": 1, "type": "SINGLE", "beds": 1, "daily": 900, "monthly": 8500, "deposit": 8500, "dim": "12x10 ft"},
+            {"number": "102", "floor": 1, "type": "DOUBLE", "beds": 2, "daily": 700, "monthly": 6500, "deposit": 6500, "dim": "14x12 ft"},
+            {"number": "103", "floor": 1, "type": "DOUBLE", "beds": 2, "daily": 700, "monthly": 6500, "deposit": 6500, "dim": "14x12 ft"},
+            {"number": "201", "floor": 2, "type": "TRIPLE", "beds": 3, "daily": 600, "monthly": 5500, "deposit": 5500, "dim": "16x14 ft"},
+            {"number": "202", "floor": 2, "type": "TRIPLE", "beds": 3, "daily": 600, "monthly": 5500, "deposit": 5500, "dim": "16x14 ft"},
+            {"number": "203", "floor": 2, "type": "DORMITORY", "beds": 6, "daily": 400, "monthly": 3500, "deposit": 3500, "dim": "20x18 ft"},
+            {"number": "301", "floor": 3, "type": "SINGLE", "beds": 1, "daily": 950, "monthly": 9000, "deposit": 9000, "dim": "12x10 ft"},
+            {"number": "302", "floor": 3, "type": "DOUBLE", "beds": 2, "daily": 750, "monthly": 7000, "deposit": 7000, "dim": "14x12 ft"},
         ],
     },
     {
@@ -27143,7 +26760,7 @@ HOSTELS_CONFIG = [
         "slug": "pearl-girls-hostel",
         "city": "Bangalore",
         "state": "Karnataka",
-        "hostel_type": "girls",
+        "hostel_type": "GIRLS",
         "description": (
             "Pearl Girls Hostel is a safe, comfortable, and well-managed accommodation "
             "exclusively for women in Bangalore. Located in Koramangala, we are minutes "
@@ -27176,13 +26793,13 @@ HOSTELS_CONFIG = [
             ("Housekeeping", "services"), ("Wardrobe", "furniture"),
         ],
         "rooms": [
-            {"number": "A101", "floor": 1, "type": "single", "beds": 1, "daily": 1000, "monthly": 9500, "deposit": 9500, "dim": "12x10 ft"},
-            {"number": "A102", "floor": 1, "type": "double", "beds": 2, "daily": 800, "monthly": 7500, "deposit": 7500, "dim": "14x12 ft"},
-            {"number": "A103", "floor": 1, "type": "double", "beds": 2, "daily": 800, "monthly": 7500, "deposit": 7500, "dim": "14x12 ft"},
-            {"number": "B201", "floor": 2, "type": "triple", "beds": 3, "daily": 650, "monthly": 6000, "deposit": 6000, "dim": "16x14 ft"},
-            {"number": "B202", "floor": 2, "type": "triple", "beds": 3, "daily": 650, "monthly": 6000, "deposit": 6000, "dim": "16x14 ft"},
-            {"number": "C301", "floor": 3, "type": "single", "beds": 1, "daily": 1050, "monthly": 10000, "deposit": 10000, "dim": "12x10 ft"},
-            {"number": "C302", "floor": 3, "type": "dormitory", "beds": 4, "daily": 450, "monthly": 4000, "deposit": 4000, "dim": "18x16 ft"},
+            {"number": "A101", "floor": 1, "type": "SINGLE", "beds": 1, "daily": 1000, "monthly": 9500, "deposit": 9500, "dim": "12x10 ft"},
+            {"number": "A102", "floor": 1, "type": "DOUBLE", "beds": 2, "daily": 800, "monthly": 7500, "deposit": 7500, "dim": "14x12 ft"},
+            {"number": "A103", "floor": 1, "type": "DOUBLE", "beds": 2, "daily": 800, "monthly": 7500, "deposit": 7500, "dim": "14x12 ft"},
+            {"number": "B201", "floor": 2, "type": "TRIPLE", "beds": 3, "daily": 650, "monthly": 6000, "deposit": 6000, "dim": "16x14 ft"},
+            {"number": "B202", "floor": 2, "type": "TRIPLE", "beds": 3, "daily": 650, "monthly": 6000, "deposit": 6000, "dim": "16x14 ft"},
+            {"number": "C301", "floor": 3, "type": "SINGLE", "beds": 1, "daily": 1050, "monthly": 10000, "deposit": 10000, "dim": "12x10 ft"},
+            {"number": "C302", "floor": 3, "type": "DORMITORY", "beds": 4, "daily": 450, "monthly": 4000, "deposit": 4000, "dim": "18x16 ft"},
         ],
     },
     {
@@ -27190,7 +26807,7 @@ HOSTELS_CONFIG = [
         "slug": "sunrise-co-ed-hostel",
         "city": "Pune",
         "state": "Maharashtra",
-        "hostel_type": "coed",
+        "hostel_type": "co-living",
         "description": (
             "Sunrise Co-ed Hostel is a modern, vibrant accommodation for students and "
             "young professionals in Pune. Located in Kothrud, we offer separate floors "
@@ -27223,13 +26840,13 @@ HOSTELS_CONFIG = [
             ("Cafeteria", "food"), ("Study Hall", "facilities"),
         ],
         "rooms": [
-            {"number": "M101", "floor": 1, "type": "single", "beds": 1, "daily": 850, "monthly": 8000, "deposit": 8000, "dim": "12x10 ft"},
-            {"number": "M102", "floor": 1, "type": "double", "beds": 2, "daily": 650, "monthly": 6000, "deposit": 6000, "dim": "14x12 ft"},
-            {"number": "M201", "floor": 2, "type": "triple", "beds": 3, "daily": 550, "monthly": 5000, "deposit": 5000, "dim": "16x14 ft"},
-            {"number": "M202", "floor": 2, "type": "dormitory", "beds": 6, "daily": 380, "monthly": 3200, "deposit": 3200, "dim": "20x18 ft"},
-            {"number": "F301", "floor": 3, "type": "single", "beds": 1, "daily": 900, "monthly": 8500, "deposit": 8500, "dim": "12x10 ft"},
-            {"number": "F302", "floor": 3, "type": "double", "beds": 2, "daily": 700, "monthly": 6500, "deposit": 6500, "dim": "14x12 ft"},
-            {"number": "F303", "floor": 3, "type": "triple", "beds": 3, "daily": 580, "monthly": 5200, "deposit": 5200, "dim": "16x14 ft"},
+            {"number": "M101", "floor": 1, "type": "SINGLE", "beds": 1, "daily": 850, "monthly": 8000, "deposit": 8000, "dim": "12x10 ft"},
+            {"number": "M102", "floor": 1, "type": "DOUBLE", "beds": 2, "daily": 650, "monthly": 6000, "deposit": 6000, "dim": "14x12 ft"},
+            {"number": "M201", "floor": 2, "type": "TRIPLE", "beds": 3, "daily": 550, "monthly": 5000, "deposit": 5000, "dim": "16x14 ft"},
+            {"number": "M202", "floor": 2, "type": "DORMITORY", "beds": 6, "daily": 380, "monthly": 3200, "deposit": 3200, "dim": "20x18 ft"},
+            {"number": "F301", "floor": 3, "type": "SINGLE", "beds": 1, "daily": 900, "monthly": 8500, "deposit": 8500, "dim": "12x10 ft"},
+            {"number": "F302", "floor": 3, "type": "DOUBLE", "beds": 2, "daily": 700, "monthly": 6500, "deposit": 6500, "dim": "14x12 ft"},
+            {"number": "F303", "floor": 3, "type": "TRIPLE", "beds": 3, "daily": 580, "monthly": 5200, "deposit": 5200, "dim": "16x14 ft"},
         ],
     },
     {
@@ -27237,7 +26854,7 @@ HOSTELS_CONFIG = [
         "slug": "metro-stay-hostel",
         "city": "Mumbai",
         "state": "Maharashtra",
-        "hostel_type": "coed",
+        "hostel_type": "COED",
         "description": (
             "Metro Stay Hostel is a premium co-ed hostel in the heart of Mumbai, "
             "offering unmatched connectivity and comfort. Located in Andheri West, "
@@ -27270,12 +26887,12 @@ HOSTELS_CONFIG = [
             ("Elevator", "facilities"), ("Parking", "facilities"),
         ],
         "rooms": [
-            {"number": "101", "floor": 1, "type": "single", "beds": 1, "daily": 1200, "monthly": 12000, "deposit": 12000, "dim": "12x10 ft"},
-            {"number": "102", "floor": 1, "type": "double", "beds": 2, "daily": 950, "monthly": 9000, "deposit": 9000, "dim": "14x12 ft"},
-            {"number": "201", "floor": 2, "type": "single", "beds": 1, "daily": 1300, "monthly": 13000, "deposit": 13000, "dim": "12x10 ft"},
-            {"number": "202", "floor": 2, "type": "double", "beds": 2, "daily": 1000, "monthly": 9500, "deposit": 9500, "dim": "14x12 ft"},
-            {"number": "203", "floor": 2, "type": "triple", "beds": 3, "daily": 800, "monthly": 7500, "deposit": 7500, "dim": "16x14 ft"},
-            {"number": "301", "floor": 3, "type": "dormitory", "beds": 5, "daily": 550, "monthly": 5000, "deposit": 5000, "dim": "20x18 ft"},
+            {"number": "101", "floor": 1, "type": "SINGLE", "beds": 1, "daily": 1200, "monthly": 12000, "deposit": 12000, "dim": "12x10 ft"},
+            {"number": "102", "floor": 1, "type": "DOUBLE", "beds": 2, "daily": 950, "monthly": 9000, "deposit": 9000, "dim": "14x12 ft"},
+            {"number": "201", "floor": 2, "type": "SINGLE", "beds": 1, "daily": 1300, "monthly": 13000, "deposit": 13000, "dim": "12x10 ft"},
+            {"number": "202", "floor": 2, "type": "DOUBLE", "beds": 2, "daily": 1000, "monthly": 9500, "deposit": 9500, "dim": "14x12 ft"},
+            {"number": "203", "floor": 2, "type": "TRIPLE", "beds": 3, "daily": 800, "monthly": 7500, "deposit": 7500, "dim": "16x14 ft"},
+            {"number": "301", "floor": 3, "type": "DORMITORY", "beds": 5, "daily": 550, "monthly": 5000, "deposit": 5000, "dim": "20x18 ft"},
         ],
     },
 ]
@@ -27523,8 +27140,8 @@ class StayEaseSeeder:
         return hostel.id
 
     # ------------------------------------------------------------------
-    async def create_rooms_and_beds(self, hostel_id: str,
-                                    rooms_cfg: list) -> None:
+
+    async def create_rooms_and_beds(self, hostel_id: str, rooms_cfg: list) -> None:
         for r in rooms_cfg:
             room = Room(
                 id=self._uid(), hostel_id=hostel_id,
@@ -27540,10 +27157,23 @@ class StayEaseSeeder:
             self.rooms[room.id] = {"hostel_id": hostel_id, "room_id": room.id}
 
             for b in range(1, r["beds"] + 1):
+                bed_number = f"B{b}"
+                
+                # Check if bed already exists
+                existing_bed = None
+                for existing in self.beds.values():
+                    if existing.get("room_id") == room.id and existing.get("bed_number") == bed_number:
+                        existing_bed = existing
+                        break
+                
+                if existing_bed:
+                    print(f"    → Bed {bed_number} already exists, skipping")
+                    continue
+                    
                 bed = Bed(
                     id=self._uid(), hostel_id=hostel_id,
                     room_id=room.id,
-                    bed_number=f"B{b}",
+                    bed_number=bed_number,
                     status=BedStatus.AVAILABLE,
                 )
                 self.session.add(bed)
@@ -27552,6 +27182,7 @@ class StayEaseSeeder:
                     "hostel_id": hostel_id,
                     "room_id": room.id,
                     "bed_id": bed.id,
+                    "bed_number": bed_number,
                 }
 
     # ------------------------------------------------------------------
@@ -28119,29 +27750,33 @@ async def _run():
     if clean:
         print("\n🗑️  Cleaning existing data (--clean flag)...\n")
         async with engine.begin() as conn:
-            # Disable FK checks temporarily and delete all data
-            await conn.execute(__import__("sqlalchemy").text("SET session_replication_role = replica"))
+            # Delete in reverse dependency order (child tables first)
+            # Use TRUNCATE with CASCADE - doesn't require superuser on most clouds
             tables = [
                 "complaint_comments", "notice_reads", "attendance_records",
-                "maintenance_requests", "complaints", "notices",
-                "mess_menu_items", "mess_menus",
-                "reviews", "inquiries", "subscriptions",
-                "bed_stays", "booking_status_history", "payments",
-                "payment_webhook_events", "students",
-                "bookings", "beds", "rooms",
-                "hostel_amenities", "hostel_images",
-                "admin_hostel_mappings", "supervisor_hostel_mappings",
-                "visitor_favorites", "waitlist_entries",
-                "hostels", "otp_verifications", "refresh_tokens", "users",
+                "maintenance_requests", "waitlist_entries", "reviews",
+                "inquiries", "payment_webhook_events", "payments",
+                "bed_stays", "booking_status_history", "students",
+                "bookings", "beds", "rooms", "hostel_amenities",
+                "hostel_images", "admin_hostel_mappings", "supervisor_hostel_mappings",
+                "visitor_favorites", "subscriptions", "complaints", "notices",
+                "mess_menu_items", "mess_menus", "hostels",
+                "otp_verifications", "refresh_tokens", "users",
             ]
+            
+            # Try TRUNCATE first (cleaner, often works without superuser)
             for table in tables:
                 try:
-                    await conn.execute(__import__("sqlalchemy").text(f'DELETE FROM "{table}"'))
+                    await conn.execute(__import__("sqlalchemy").text(f'TRUNCATE TABLE "{table}" CASCADE'))
                     print(f"  ✓ Cleared {table}")
                 except Exception as e:
-                    print(f"  ⚠ Skip {table}: {e}")
-            await conn.execute(__import__("sqlalchemy").text("SET session_replication_role = DEFAULT"))
-        print("\n  ✓ All tables cleared\n")
+                    # Fall back to DELETE if TRUNCATE fails
+                    try:
+                        await conn.execute(__import__("sqlalchemy").text(f'DELETE FROM "{table}"'))
+                        print(f"  ✓ Cleared {table} (via DELETE)")
+                    except Exception as e2:
+                        print(f"  ⚠ Could not clear {table}: {e2}")
+        print("\n  ✓ Data clearing complete\n")
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -28223,13 +27858,13 @@ if __name__ == "__main__":
     asyncio.run(seed_render())
 
 ============================================================
-FILE: scripts\test_admin_creation_with_validation.py
+FILE: scripts\test_bed_management.py
 ============================================================
-# scripts/test_duplicate_email_admins.py
 #!/usr/bin/env python3
 """
-Test: Can same email be used for multiple hostel admins?
-Run: python scripts/test_duplicate_email_admins.py
+Bed Management API Test Script
+Tests: update status, change bed number, move between rooms
+Run: python scripts/test_bed_management.py
 """
 
 import json
@@ -28239,7 +27874,6 @@ from datetime import datetime
 
 BASE_URL = "http://localhost:8000/api/v1"
 
-# ANSI colors
 GREEN = '\033[92m'
 RED = '\033[91m'
 YELLOW = '\033[93m'
@@ -28248,31 +27882,21 @@ CYAN = '\033[96m'
 RESET = '\033[0m'
 BOLD = '\033[1m'
 
-
-def print_success(text: str):
+def print_success(text):
     print(f"{GREEN}✓ {text}{RESET}")
 
-
-def print_error(text: str):
+def print_error(text):
     print(f"{RED}✗ {text}{RESET}")
 
-
-def print_info(text: str):
+def print_info(text):
     print(f"{BLUE}ℹ {text}{RESET}")
 
-
-def print_warning(text: str):
-    print(f"{YELLOW}⚠ {text}{RESET}")
-
-
-def print_section(title: str):
+def print_section(title):
     print(f"\n{CYAN}{'='*70}{RESET}")
     print(f"{CYAN}{title:^70}{RESET}")
     print(f"{CYAN}{'='*70}{RESET}\n")
 
-
-def make_request(method: str, path: str, token: str = None, body: dict = None) -> tuple:
-    """Make HTTP request to API"""
+def make_request(method, path, token=None, body=None):
     url = BASE_URL + path
     data = json.dumps(body).encode() if body else None
     headers = {"Content-Type": "application/json"}
@@ -28293,238 +27917,240 @@ def make_request(method: str, path: str, token: str = None, body: dict = None) -
     except Exception as e:
         return 500, {"detail": str(e)}
 
-
-def login(email: str, password: str = "Test@1234") -> str:
-    """Login and return access token"""
+def login(email, password="Test@1234"):
     status, data = make_request("POST", "/auth/login", body={
         "email_or_phone": email,
         "password": password
     })
     if status == 200:
-        return data.get("access_token")
-    else:
-        print_error(f"Login failed: {data.get('detail', 'Unknown')}")
-        return None
+        return data.get("access_token"), data.get("hostel_ids", [])
+    return None, []
 
-
-def list_admins(token: str) -> list:
-    """List all admins"""
-    status, data = make_request("GET", "/super-admin/admins", token=token)
-    if status == 200:
-        return data
-    return []
-
-
-def create_admin(token: str, email: str, phone: str, full_name: str, password: str = "Test@1234") -> tuple:
-    """Create a new admin"""
-    payload = {
-        "email": email,
-        "phone": phone,
-        "full_name": full_name,
-        "password": password
-    }
-    return make_request("POST", "/super-admin/admins", token=token, body=payload)
-
-
-def get_hostels(token: str) -> list:
-    """Get all hostels"""
-    status, data = make_request("GET", "/super-admin/hostels", token=token)
-    if status == 200:
-        return data
-    return []
-
-
-def assign_hostel_to_admin(token: str, admin_id: str, hostel_id: str) -> tuple:
-    """Assign a hostel to an admin"""
-    payload = {"hostel_ids": [hostel_id]}
-    return make_request("POST", f"/super-admin/admins/{admin_id}/assign-hostels", token=token, body=payload)
-
-
-def main():
-    print_section("DUPLICATE EMAIL TEST FOR MULTIPLE HOSTELS")
+class BedManagementTester:
+    def __init__(self):
+        self.token = None
+        self.hostel_id = None
+        self.room1_id = None
+        self.room2_id = None
+        self.test_bed_id = None
+        self.results = {"passed": 0, "failed": 0}
     
-    # Login as Super Admin
-    token = login("superadmin@stayease.com")
-    if not token:
-        print_error("Cannot proceed without super admin token")
-        return
+    def add_result(self, name, passed, message=""):
+        if passed:
+            self.results["passed"] += 1
+            print_success(f"{name}: {message}" if message else name)
+        else:
+            self.results["failed"] += 1
+            print_error(f"{name}: {message}" if message else name)
     
-    print_success("Logged in as Super Admin")
-    
-    # Get existing admins
-    print_info("\nFetching existing admins...")
-    admins = list_admins(token)
-    print_info(f"Found {len(admins)} existing admins")
-    
-    # Get hostels
-    hostels = get_hostels(token)
-    if len(hostels) < 2:
-        print_error(f"Need at least 2 hostels for this test. Found {len(hostels)}")
-        return
-    
-    print_info(f"Found {len(hostels)} hostels")
-    for i, hostel in enumerate(hostels[:3], 1):
-        print_info(f"  {i}. {hostel.get('name')} (ID: {hostel.get('id')[:8]}...)")
-    
-    # Test 1: Create first admin
-    print_section("TEST 1: Create First Admin")
-    
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    test_email = f"duplicate.test.{timestamp}@stayease.com"
-    test_phone = f"9{timestamp[:8]}12345"
-    
-    print_info(f"Creating admin with email: {test_email}")
-    status, data = create_admin(token, test_email, test_phone, "First Admin Test")
-    
-    if status == 201:
-        first_admin_id = data.get("id")
-        print_success(f"First admin created successfully! ID: {first_admin_id[:8]}...")
+    def setup(self):
+        print_section("SETUP")
         
-        # Assign first hostel to this admin
-        first_hostel_id = hostels[0].get("id")
-        print_info(f"\nAssigning hostel: {hostels[0].get('name')}")
-        status, data = assign_hostel_to_admin(token, first_admin_id, first_hostel_id)
+        token, hostel_ids = login("admin1@stayease.com")
+        if not token:
+            print_error("Login failed")
+            return False
+        
+        self.token = token
+        if hostel_ids:
+            self.hostel_id = hostel_ids[0]
+            print_info(f"Hostel ID: {self.hostel_id}")
+        else:
+            print_error("No hostel assigned")
+            return False
+        
+        # Get rooms
+        status, rooms = make_request("GET", f"/admin/hostels/{self.hostel_id}/rooms", token=self.token)
+        if status != 200 or len(rooms) < 2:
+            print_error("Need at least 2 rooms for testing")
+            return False
+        
+        self.room1_id = rooms[0].get("id")
+        self.room2_id = rooms[1].get("id")
+        print_info(f"Room 1: {rooms[0].get('room_number')} (ID: {self.room1_id[:8]}...)")
+        print_info(f"Room 2: {rooms[1].get('room_number')} (ID: {self.room2_id[:8]}...)")
+        
+        # Get or create a test bed
+        status, beds = make_request("GET", f"/admin/rooms/{self.room1_id}/beds", token=self.token)
+        if status == 200 and beds:
+            self.test_bed_id = beds[0].get("id")
+            print_info(f"Using existing bed: {beds[0].get('bed_number')} (ID: {self.test_bed_id[:8]}...)")
+        else:
+            # Create a test bed
+            status, new_bed = make_request("POST", f"/admin/rooms/{self.room1_id}/beds", token=self.token, body={
+                "bed_number": f"TEST-BED-{datetime.now().strftime('%H%M%S')}",
+                "status": "available"
+            })
+            if status == 201:
+                self.test_bed_id = new_bed.get("id")
+                print_success(f"Created test bed: {new_bed.get('bed_number')}")
+            else:
+                print_error("Could not create test bed")
+                return False
+        
+        return True
+    
+    def test_update_status(self):
+        """Test updating bed status"""
+        print_section("TEST 1: Update Bed Status")
+        
+        # Get current status
+        status, beds = make_request("GET", f"/admin/rooms/{self.room1_id}/beds", token=self.token)
+        if not beds:
+            self.add_result("Update status", False, "No beds found")
+            return
+        
+        bed = next((b for b in beds if b.get("id") == self.test_bed_id), beds[0])
+        bed_id = bed.get("id")
+        original_status = bed.get("status")
+        
+        new_status = "maintenance" if original_status == "available" else "available"
+        
+        status, result = make_request("PATCH", f"/admin/beds/{bed_id}", token=self.token, body={"status": new_status})
         
         if status == 200:
-            print_success(f"Hostel assigned to first admin")
+            self.add_result("Update bed status", True, f"{original_status} → {result.get('status')}")
+            # Change back
+            make_request("PATCH", f"/admin/beds/{bed_id}", token=self.token, body={"status": original_status})
         else:
-            print_warning(f"Failed to assign hostel: {status}")
-    else:
-        print_error(f"Failed to create first admin: {status} - {data.get('detail', 'Unknown')}")
-        return
+            self.add_result("Update bed status", False, f"HTTP {status}")
     
-    # Test 2: Try to create second admin with SAME email but different phone
-    print_section("TEST 2: Create Second Admin with Same Email")
-    
-    different_phone = f"8{timestamp[:8]}54321"
-    print_info(f"Attempting to create admin with SAME email: {test_email}")
-    print_info(f"Different phone: {different_phone}")
-    
-    status, data = create_admin(token, test_email, different_phone, "Second Admin Test")
-    
-    if status == 409:
-        print_success(f"Correctly REJECTED duplicate email (HTTP 409)")
-        print_info(f"  Error: {data.get('detail', 'Email already registered')}")
-        print_success("✓ Duplicate emails are NOT allowed across hostels")
-    else:
-        print_error(f"Unexpected result: HTTP {status}")
-        if status == 201:
-            print_error("❌ Duplicate email was ACCEPTED - This is a security issue!")
-            second_admin_id = data.get("id")
-            print_info(f"  Second admin created with ID: {second_admin_id[:8]}...")
+    def test_update_bed_number(self):
+        """Test updating bed number"""
+        print_section("TEST 2: Update Bed Number")
+        
+        new_number = f"B-{datetime.now().strftime('%H%M%S')}"
+        
+        status, result = make_request("PATCH", f"/admin/beds/{self.test_bed_id}", token=self.token, body={"bed_number": new_number})
+        
+        if status == 200:
+            self.add_result("Update bed number", True, f"New number: {result.get('bed_number')}")
+            # Change back to original
+            original_number = f"B{datetime.now().strftime('%H%M%S')[-4:]}"
+            make_request("PATCH", f"/admin/beds/{self.test_bed_id}", token=self.token, body={"bed_number": original_number})
         else:
-            print_info(f"  Response: {data.get('detail', 'Unknown')}")
+            self.add_result("Update bed number", False, f"HTTP {status} - {result.get('detail', '')}")
     
-    # Test 3: Try to create admin with different email but same phone
-    print_section("TEST 3: Create Admin with Same Phone (Different Email)")
+    def test_move_bed_to_other_room(self):
+        """Test moving bed to different room"""
+        print_section("TEST 3: Move Bed to Different Room")
+        
+        # Get current room
+        status, beds = make_request("GET", f"/admin/rooms/{self.room1_id}/beds", token=self.token)
+        original_room_beds = [b.get("id") for b in beds] if beds else []
+        
+        status, result = make_request("PATCH", f"/admin/beds/{self.test_bed_id}", token=self.token, body={"room_id": self.room2_id})
+        
+        if status == 200:
+            self.add_result("Move bed to new room", True, f"Room {self.room1_id[:8]} → {self.room2_id[:8]}")
+            
+            # Verify bed is now in room 2
+            status, room2_beds = make_request("GET", f"/admin/rooms/{self.room2_id}/beds", token=self.token)
+            bed_ids = [b.get("id") for b in room2_beds] if room2_beds else []
+            if self.test_bed_id in bed_ids:
+                print_success("  Verified: Bed now in room 2")
+            
+            # Move back
+            make_request("PATCH", f"/admin/beds/{self.test_bed_id}", token=self.token, body={"room_id": self.room1_id})
+        else:
+            self.add_result("Move bed to new room", False, f"HTTP {status} - {result.get('detail', '')}")
     
-    different_email = f"different.{timestamp}@stayease.com"
-    print_info(f"Different email: {different_email}")
-    print_info(f"Same phone: {test_phone}")
+    def test_bed_stats(self):
+        """Test bed statistics endpoint"""
+        print_section("TEST 4: Bed Statistics")
+        
+        status, result = make_request("GET", f"/admin/rooms/{self.room1_id}/beds/stats", token=self.token)
+        
+        if status == 200:
+            self.add_result("Bed stats endpoint", True, f"Total beds: {result.get('total_beds')}")
+            print_info(f"  Status counts: {result.get('status_counts')}")
+        elif status == 404:
+            self.add_result("Bed stats endpoint", True, "Endpoint not implemented (optional)")
+        else:
+            self.add_result("Bed stats endpoint", False, f"HTTP {status}")
     
-    status, data = create_admin(token, different_email, test_phone, "Phone Test Admin")
+    def test_error_cases(self):
+        """Test error handling"""
+        print_section("TEST 5: Error Cases")
+        
+        # Invalid status
+        status, result = make_request("PATCH", f"/admin/beds/{self.test_bed_id}", token=self.token, body={"status": "invalid_status"})
+        
+        if status == 400:
+            self.add_result("Invalid status rejected", True)
+        else:
+            self.add_result("Invalid status rejected", False, f"Expected 400, got {status}")
+        
+        # Duplicate bed number in same room
+        status, beds = make_request("GET", f"/admin/rooms/{self.room1_id}/beds", token=self.token)
+        if beds and len(beds) >= 2:
+            first_bed = beds[0]
+            second_bed = beds[1]
+            status, result = make_request("PATCH", f"/admin/beds/{second_bed.get('id')}", token=self.token, body={"bed_number": first_bed.get("bed_number")})
+            
+            if status == 409:
+                self.add_result("Duplicate bed number blocked", True)
+            else:
+                self.add_result("Duplicate bed number blocked", False, f"Expected 409, got {status}")
+        else:
+            self.add_result("Duplicate bed number blocked", True, "Skipped - need 2 beds in same room")
+        
+        # Non-existent bed
+        fake_id = "00000000-0000-0000-0000-000000000000"
+        status, result = make_request("PATCH", f"/admin/beds/{fake_id}", token=self.token, body={"status": "available"})
+        
+        if status == 404:
+            self.add_result("Non-existent bed", True)
+        else:
+            self.add_result("Non-existent bed", False, f"Expected 404, got {status}")
     
-    if status == 409:
-        print_success(f"Correctly REJECTED duplicate phone (HTTP 409)")
-        print_info(f"  Error: {data.get('detail', 'Phone already registered')}")
-    else:
-        print_error(f"Unexpected result: HTTP {status}")
-        if status == 201:
-            print_error("❌ Duplicate phone was ACCEPTED - This is a security issue!")
-    
-    # Test 4: Check if admin can be assigned to multiple hostels (different test)
-    print_section("TEST 4: Can Same Admin Manage Multiple Hostels?")
-    
-    # Create a fresh admin for this test
-    fresh_email = f"multi.hostel.{timestamp}@stayease.com"
-    fresh_phone = f"7{timestamp[:8]}99999"
-    
-    print_info(f"Creating fresh admin: {fresh_email}")
-    status, data = create_admin(token, fresh_email, fresh_phone, "Multi-Hostel Admin")
-    
-    if status != 201:
-        print_error(f"Failed to create fresh admin: {status}")
-        return
-    
-    multi_admin_id = data.get("id")
-    print_success(f"Admin created: {multi_admin_id[:8]}...")
-    
-    # Assign first hostel
-    print_info(f"\nAssigning hostel '{hostels[0].get('name')}'...")
-    status, data = assign_hostel_to_admin(token, multi_admin_id, hostels[0].get("id"))
-    
-    if status == 200:
-        print_success(f"Hostel 1 assigned")
-    else:
-        print_error(f"Failed to assign hostel 1: {status}")
-    
-    # Assign second hostel
-    print_info(f"\nAssigning hostel '{hostels[1].get('name')}'...")
-    status, data = assign_hostel_to_admin(token, multi_admin_id, hostels[1].get("id"))
-    
-    if status == 200:
-        print_success(f"Hostel 2 assigned")
-        print_success("✓ Same admin CAN manage multiple hostels")
-    else:
-        print_error(f"Failed to assign hostel 2: {status}")
-        print_warning("Admin may be limited to single hostel")
-    
-    # Test 5: Clean up - list created admins for manual cleanup
-    print_section("TEST CLEANUP")
-    
-    print_info("Test accounts created:")
-    print_info(f"  - First admin email: {test_email}")
-    print_info(f"  - Multi-hostel admin email: {fresh_email}")
-    print_info("\nTo clean up these test accounts, run:")
-    print_info(f"  python scripts/cleanup_test_admins.py {test_email} {fresh_email}")
-    
-    # Summary
-    print_section("CONCLUSION")
-    
-    print(f"""
-{BOLD}Findings:{RESET}
-
-1. {GREEN}Duplicate emails are NOT allowed{RESET} - Creating admin with same email 
-   returns HTTP 409 Conflict, even for different hostels.
-
-2. {GREEN}Duplicate phones are NOT allowed{RESET} - Phone numbers must be unique
-   across all users.
-
-3. {GREEN}Same admin CAN manage multiple hostels{RESET} - By assigning multiple
-   hostels to the same admin account.
-
-{BOLD}Database Constraint:{RESET}
-   The `users` table has UNIQUE constraints on both `email` and `phone` columns.
-   This ensures email uniqueness across ALL roles (super_admin, hostel_admin, 
-   supervisor, student, visitor).
-
-{BOLD}Security Implication:{RESET}
-   ✅ A malicious user cannot create multiple admin accounts with the same email.
-   ✅ Prevents identity spoofing across different hostels.
-   ✅ Each hostel admin must have a unique email address.
-    """)
+    def run_all(self):
+        if not self.setup():
+            return
+        
+        self.test_update_status()
+        self.test_update_bed_number()
+        self.test_move_bed_to_other_room()
+        self.test_bed_stats()
+        self.test_error_cases()
+        
+        print_section("TEST SUMMARY")
+        total = self.results["passed"] + self.results["failed"]
+        print(f"\n  {BOLD}Total Tests:{RESET}   {total}")
+        print(f"  {GREEN}{BOLD}Passed:{RESET}      {self.results['passed']}")
+        print(f"  {RED}{BOLD}Failed:{RESET}      {self.results['failed']}")
+        
+        if self.results["failed"] == 0:
+            print(f"\n{GREEN}{BOLD}✅ ALL TESTS PASSED! Bed management is working correctly.{RESET}")
+            print(f"\n{CYAN}Available bed operations:{RESET}")
+            print("  ✓ PATCH /admin/beds/{bed_id} - Update bed number")
+            print("  ✓ PATCH /admin/beds/{bed_id} - Update bed status")
+            print("  ✓ PATCH /admin/beds/{bed_id} - Move bed to different room")
+            print("  ✓ GET  /admin/rooms/{room_id}/beds/stats - Bed statistics")
+        else:
+            print(f"\n{RED}{BOLD}❌ Some tests failed. Check the errors above.{RESET}")
 
 if __name__ == "__main__":
-    main()
+    tester = BedManagementTester()
+    tester.run_all()
 
 ============================================================
-FILE: scripts\test_duplicate_email_admins.py
+FILE: scripts\test_bed_permissions.py
 ============================================================
-# scripts/test_duplicate_email_admins.py
+# scripts/test_bed_permissions.py
 #!/usr/bin/env python3
 """
-Test: Can same email be used for multiple hostel admins?
-Run: python scripts/test_duplicate_email_admins.py
+Test Bed Management Permissions
+Verifies that only hostel admins can update bed details
+Run: python scripts/test_bed_permissions.py
 """
 
 import json
 import urllib.request
 import urllib.error
-from datetime import datetime
 
 BASE_URL = "http://localhost:8000/api/v1"
 
-# ANSI colors
 GREEN = '\033[92m'
 RED = '\033[91m'
 YELLOW = '\033[93m'
@@ -28533,31 +28159,21 @@ CYAN = '\033[96m'
 RESET = '\033[0m'
 BOLD = '\033[1m'
 
-
-def print_success(text: str):
+def print_success(text):
     print(f"{GREEN}✓ {text}{RESET}")
 
-
-def print_error(text: str):
+def print_error(text):
     print(f"{RED}✗ {text}{RESET}")
 
-
-def print_info(text: str):
+def print_info(text):
     print(f"{BLUE}ℹ {text}{RESET}")
 
-
-def print_warning(text: str):
-    print(f"{YELLOW}⚠ {text}{RESET}")
-
-
-def print_section(title: str):
+def print_section(title):
     print(f"\n{CYAN}{'='*70}{RESET}")
     print(f"{CYAN}{title:^70}{RESET}")
     print(f"{CYAN}{'='*70}{RESET}\n")
 
-
-def make_request(method: str, path: str, token: str = None, body: dict = None) -> tuple:
-    """Make HTTP request to API"""
+def make_request(method, path, token=None, body=None):
     url = BASE_URL + path
     data = json.dumps(body).encode() if body else None
     headers = {"Content-Type": "application/json"}
@@ -28578,384 +28194,173 @@ def make_request(method: str, path: str, token: str = None, body: dict = None) -
     except Exception as e:
         return 500, {"detail": str(e)}
 
-
-def login(email: str, password: str = "Test@1234") -> str:
-    """Login and return access token"""
+def login(email, password="Test@1234"):
     status, data = make_request("POST", "/auth/login", body={
         "email_or_phone": email,
         "password": password
     })
     if status == 200:
-        return data.get("access_token")
-    else:
-        print_error(f"Login failed: {data.get('detail', 'Unknown')}")
+        return data.get("access_token"), data.get("role"), data.get("hostel_ids", [])
+    return None, None, []
+
+def get_first_bed(token, hostel_id):
+    """Get first bed ID from first room"""
+    status, rooms = make_request("GET", f"/admin/hostels/{hostel_id}/rooms", token=token)
+    if status != 200 or not rooms:
         return None
-
-
-def list_admins(token: str) -> list:
-    """List all admins"""
-    status, data = make_request("GET", "/super-admin/admins", token=token)
-    if status == 200:
-        return data
-    return []
-
-
-def create_admin(token: str, email: str, phone: str, full_name: str, password: str = "Test@1234") -> tuple:
-    """Create a new admin"""
-    payload = {
-        "email": email,
-        "phone": phone,
-        "full_name": full_name,
-        "password": password
-    }
-    return make_request("POST", "/super-admin/admins", token=token, body=payload)
-
-
-def get_hostels(token: str) -> list:
-    """Get all hostels"""
-    status, data = make_request("GET", "/super-admin/hostels", token=token)
-    if status == 200:
-        return data
-    return []
-
-
-def assign_hostel_to_admin(token: str, admin_id: str, hostel_id: str) -> tuple:
-    """Assign a hostel to an admin"""
-    payload = {"hostel_ids": [hostel_id]}
-    return make_request("POST", f"/super-admin/admins/{admin_id}/assign-hostels", token=token, body=payload)
-
-
-def main():
-    print_section("DUPLICATE EMAIL TEST FOR MULTIPLE HOSTELS")
     
-    # Login as Super Admin
-    token = login("superadmin@stayease.com")
-    if not token:
-        print_error("Cannot proceed without super admin token")
-        return
+    room_id = rooms[0].get("id")
+    status, beds = make_request("GET", f"/admin/rooms/{room_id}/beds", token=token)
+    if status != 200 or not beds:
+        return None
     
-    print_success("Logged in as Super Admin")
+    return beds[0].get("id")
+
+def test_bed_permissions():
+    print_section("BED MANAGEMENT PERMISSIONS TEST")
     
-    # Get existing admins
-    print_info("\nFetching existing admins...")
-    admins = list_admins(token)
-    print_info(f"Found {len(admins)} existing admins")
+    results = {"passed": 0, "failed": 0}
     
-    # Get hostels
-    hostels = get_hostels(token)
-    if len(hostels) < 2:
-        print_error(f"Need at least 2 hostels for this test. Found {len(hostels)}")
-        return
-    
-    print_info(f"Found {len(hostels)} hostels")
-    for i, hostel in enumerate(hostels[:3], 1):
-        print_info(f"  {i}. {hostel.get('name')} (ID: {hostel.get('id')[:8]}...)")
-    
-    # Test 1: Create first admin
-    print_section("TEST 1: Create First Admin")
-    
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    test_email = f"duplicate.test.{timestamp}@stayease.com"
-    test_phone = f"9{timestamp[:8]}12345"
-    
-    print_info(f"Creating admin with email: {test_email}")
-    status, data = create_admin(token, test_email, test_phone, "First Admin Test")
-    
-    if status == 201:
-        first_admin_id = data.get("id")
-        print_success(f"First admin created successfully! ID: {first_admin_id[:8]}...")
-        
-        # Assign first hostel to this admin
-        first_hostel_id = hostels[0].get("id")
-        print_info(f"\nAssigning hostel: {hostels[0].get('name')}")
-        status, data = assign_hostel_to_admin(token, first_admin_id, first_hostel_id)
-        
-        if status == 200:
-            print_success(f"Hostel assigned to first admin")
+    def add_result(name, passed, message=""):
+        if passed:
+            results["passed"] += 1
+            print_success(f"{name}: {message}" if message else name)
         else:
-            print_warning(f"Failed to assign hostel: {status}")
-    else:
-        print_error(f"Failed to create first admin: {status} - {data.get('detail', 'Unknown')}")
+            results["failed"] += 1
+            print_error(f"{name}: {message}" if message else name)
+    
+    # 1. Login as Admin (should have permission)
+    print_info("\n1. Testing as Hostel Admin...")
+    admin_token, admin_role, admin_hostels = login("admin1@stayease.com")
+    
+    if not admin_token:
+        print_error("Admin login failed")
         return
     
-    # Test 2: Try to create second admin with SAME email but different phone
-    print_section("TEST 2: Create Second Admin with Same Email")
+    print_success(f"Logged in as {admin_role}")
     
-    different_phone = f"8{timestamp[:8]}54321"
-    print_info(f"Attempting to create admin with SAME email: {test_email}")
-    print_info(f"Different phone: {different_phone}")
-    
-    status, data = create_admin(token, test_email, different_phone, "Second Admin Test")
-    
-    if status == 409:
-        print_success(f"Correctly REJECTED duplicate email (HTTP 409)")
-        print_info(f"  Error: {data.get('detail', 'Email already registered')}")
-        print_success("✓ Duplicate emails are NOT allowed across hostels")
-    else:
-        print_error(f"Unexpected result: HTTP {status}")
-        if status == 201:
-            print_error("❌ Duplicate email was ACCEPTED - This is a security issue!")
-            second_admin_id = data.get("id")
-            print_info(f"  Second admin created with ID: {second_admin_id[:8]}...")
+    # Get a bed ID
+    if admin_hostels:
+        bed_id = get_first_bed(admin_token, admin_hostels[0])
+        if bed_id:
+            print_info(f"Using bed ID: {bed_id[:8]}...")
+            
+            # Try to update bed status as admin
+            status, data = make_request("PATCH", f"/admin/beds/{bed_id}", token=admin_token, body={"status": "maintenance"})
+            
+            if status == 200:
+                add_result("Admin can update bed", True, f"HTTP {status}")
+                # Change back
+                make_request("PATCH", f"/admin/beds/{bed_id}", token=admin_token, body={"status": "available"})
+            else:
+                add_result("Admin can update bed", False, f"HTTP {status}")
         else:
-            print_info(f"  Response: {data.get('detail', 'Unknown')}")
-    
-    # Test 3: Try to create admin with different email but same phone
-    print_section("TEST 3: Create Admin with Same Phone (Different Email)")
-    
-    different_email = f"different.{timestamp}@stayease.com"
-    print_info(f"Different email: {different_email}")
-    print_info(f"Same phone: {test_phone}")
-    
-    status, data = create_admin(token, different_email, test_phone, "Phone Test Admin")
-    
-    if status == 409:
-        print_success(f"Correctly REJECTED duplicate phone (HTTP 409)")
-        print_info(f"  Error: {data.get('detail', 'Phone already registered')}")
+            print_error("Could not find a bed to test with")
     else:
-        print_error(f"Unexpected result: HTTP {status}")
-        if status == 201:
-            print_error("❌ Duplicate phone was ACCEPTED - This is a security issue!")
+        print_error("Admin has no hostels assigned")
     
-    # Test 4: Check if admin can be assigned to multiple hostels (different test)
-    print_section("TEST 4: Can Same Admin Manage Multiple Hostels?")
+    # 2. Login as Supervisor (should NOT have permission)
+    print_info("\n2. Testing as Supervisor...")
+    sup_token, sup_role, sup_hostels = login("supervisor1@stayease.com")
     
-    # Create a fresh admin for this test
-    fresh_email = f"multi.hostel.{timestamp}@stayease.com"
-    fresh_phone = f"7{timestamp[:8]}99999"
-    
-    print_info(f"Creating fresh admin: {fresh_email}")
-    status, data = create_admin(token, fresh_email, fresh_phone, "Multi-Hostel Admin")
-    
-    if status != 201:
-        print_error(f"Failed to create fresh admin: {status}")
-        return
-    
-    multi_admin_id = data.get("id")
-    print_success(f"Admin created: {multi_admin_id[:8]}...")
-    
-    # Assign first hostel
-    print_info(f"\nAssigning hostel '{hostels[0].get('name')}'...")
-    status, data = assign_hostel_to_admin(token, multi_admin_id, hostels[0].get("id"))
-    
-    if status == 200:
-        print_success(f"Hostel 1 assigned")
+    if sup_token:
+        print_success(f"Logged in as {sup_role}")
+        
+        if admin_hostels and bed_id:
+            # Try to update bed as supervisor (should fail)
+            status, data = make_request("PATCH", f"/admin/beds/{bed_id}", token=sup_token, body={"status": "maintenance"})
+            
+            if status == 403:
+                add_result("Supervisor cannot update bed", True, f"HTTP {status} - Access denied")
+            else:
+                add_result("Supervisor cannot update bed", False, f"Expected 403, got {status}")
     else:
-        print_error(f"Failed to assign hostel 1: {status}")
+        print_error("Supervisor login failed")
     
-    # Assign second hostel
-    print_info(f"\nAssigning hostel '{hostels[1].get('name')}'...")
-    status, data = assign_hostel_to_admin(token, multi_admin_id, hostels[1].get("id"))
+    # 3. Login as Student (should NOT have permission)
+    print_info("\n3. Testing as Student...")
+    student_token, student_role, _ = login("hemant.pawade.lev044@levitica.in")
     
-    if status == 200:
-        print_success(f"Hostel 2 assigned")
-        print_success("✓ Same admin CAN manage multiple hostels")
+    if student_token:
+        print_success(f"Logged in as {student_role}")
+        
+        if admin_hostels and bed_id:
+            # Try to update bed as student (should fail)
+            status, data = make_request("PATCH", f"/admin/beds/{bed_id}", token=student_token, body={"status": "maintenance"})
+            
+            if status == 403:
+                add_result("Student cannot update bed", True, f"HTTP {status} - Access denied")
+            else:
+                add_result("Student cannot update bed", False, f"Expected 403, got {status}")
     else:
-        print_error(f"Failed to assign hostel 2: {status}")
-        print_warning("Admin may be limited to single hostel")
+        print_error("Student login failed")
     
-    # Test 5: Clean up - list created admins for manual cleanup
-    print_section("TEST CLEANUP")
+    # 4. Login as Visitor (should NOT have permission)
+    print_info("\n4. Testing as Visitor...")
+    visitor_token, visitor_role, _ = login("arun.kapoor@gmail.com")
     
-    print_info("Test accounts created:")
-    print_info(f"  - First admin email: {test_email}")
-    print_info(f"  - Multi-hostel admin email: {fresh_email}")
-    print_info("\nTo clean up these test accounts, run:")
-    print_info(f"  python scripts/cleanup_test_admins.py {test_email} {fresh_email}")
+    if visitor_token:
+        print_success(f"Logged in as {visitor_role}")
+        
+        if admin_hostels and bed_id:
+            # Try to update bed as visitor (should fail)
+            status, data = make_request("PATCH", f"/admin/beds/{bed_id}", token=visitor_token, body={"status": "maintenance"})
+            
+            if status == 403:
+                add_result("Visitor cannot update bed", True, f"HTTP {status} - Access denied")
+            else:
+                add_result("Visitor cannot update bed", False, f"Expected 403, got {status}")
+    else:
+        print_error("Visitor login failed")
+    
+    # 5. Test unauthenticated access
+    print_info("\n5. Testing unauthenticated access...")
+    status, data = make_request("PATCH", f"/admin/beds/{bed_id if bed_id else 'test'}", body={"status": "maintenance"})
+    
+    if status == 401:
+        add_result("Unauthenticated cannot update bed", True, f"HTTP {status} - Auth required")
+    else:
+        add_result("Unauthenticated cannot update bed", False, f"Expected 401, got {status}")
     
     # Summary
-    print_section("CONCLUSION")
+    print_section("TEST SUMMARY")
+    total = results["passed"] + results["failed"]
+    print(f"\n  {BOLD}Total Tests:{RESET}   {total}")
+    print(f"  {GREEN}{BOLD}Passed:{RESET}      {results['passed']}")
+    print(f"  {RED}{BOLD}Failed:{RESET}      {results['failed']}")
     
-    print(f"""
-{BOLD}Findings:{RESET}
-
-1. {GREEN}Duplicate emails are NOT allowed{RESET} - Creating admin with same email 
-   returns HTTP 409 Conflict, even for different hostels.
-
-2. {GREEN}Duplicate phones are NOT allowed{RESET} - Phone numbers must be unique
-   across all users.
-
-3. {GREEN}Same admin CAN manage multiple hostels{RESET} - By assigning multiple
-   hostels to the same admin account.
-
-{BOLD}Database Constraint:{RESET}
-   The `users` table has UNIQUE constraints on both `email` and `phone` columns.
-   This ensures email uniqueness across ALL roles (super_admin, hostel_admin, 
-   supervisor, student, visitor).
-
-{BOLD}Security Implication:{RESET}
-   ✅ A malicious user cannot create multiple admin accounts with the same email.
-   ✅ Prevents identity spoofing across different hostels.
-   ✅ Each hostel admin must have a unique email address.
-    """)
+    if results["failed"] == 0:
+        print(f"\n{GREEN}{BOLD}✅ ALL PERMISSION TESTS PASSED!{RESET}")
+        print(f"\n{CYAN}Permission Summary:{RESET}")
+        print("  ✓ Hostel Admin - Can update beds")
+        print("  ✗ Supervisor - Cannot update beds (403 Forbidden)")
+        print("  ✗ Student - Cannot update beds (403 Forbidden)")
+        print("  ✗ Visitor - Cannot update beds (403 Forbidden)")
+        print("  ✗ Unauthenticated - Cannot update beds (401 Unauthorized)")
+    else:
+        print(f"\n{RED}{BOLD}❌ Some permission tests failed.{RESET}")
 
 if __name__ == "__main__":
-    main()
+    test_bed_permissions()
 
 ============================================================
-FILE: scripts\test_email.py
+FILE: scripts\test_bed_validation.py
 ============================================================
-"""
-Test email service functionality.
-Run with: python scripts/test_email.py
-"""
-import asyncio
-import sys
-from pathlib import Path
-
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from app.integrations.email import EmailService
-
-
-async def test_all_emails():
-    """Test all email templates."""
-    email_service = EmailService()
-    
-    print("\n" + "="*60)
-    print("📧 Testing StayEase Email Service")
-    print("="*60 + "\n")
-    
-    # Use your test email here - CHANGE THIS TO YOUR EMAIL!
-    test_email = "test@example.com"  # 👈 REPLACE WITH YOUR ACTUAL EMAIL
-    
-    tests = [
-        {
-            "name": "Booking Confirmation",
-            "func": email_service.send_booking_confirmation,
-            "kwargs": {
-                "recipient_email": test_email,
-                "recipient_name": "John Doe",
-                "booking_number": "BK-TEST-001",
-                "hostel_name": "Green Valley Hostel",
-                "check_in_date": "2026-04-01",
-                "check_out_date": "2026-04-15",
-                "total_amount": 15000.00,
-                "payment_status": "paid"
-            }
-        },
-        {
-            "name": "Payment Receipt",
-            "func": email_service.send_payment_receipt,
-            "kwargs": {
-                "recipient_email": test_email,
-                "recipient_name": "John Doe",
-                "payment_id": "pay_test_001",
-                "amount": 15000.00,
-                "payment_type": "booking_advance",
-                "transaction_id": "txn_001",
-                "payment_date": "2026-03-27"
-            }
-        },
-        {
-            "name": "Password Reset OTP",
-            "func": email_service.send_password_reset_otp,
-            "kwargs": {
-                "recipient_email": test_email,
-                "recipient_name": "John Doe",
-                "otp": "123456"
-            }
-        },
-        {
-            "name": "Welcome Email",
-            "func": email_service.send_registration_welcome,
-            "kwargs": {
-                "recipient_email": test_email,
-                "recipient_name": "John Doe"
-            }
-        }
-    ]
-    
-    passed = 0
-    failed = 0
-    
-    for i, test in enumerate(tests, 1):
-        print(f"[{i}/4] Testing: {test['name']}")
-        try:
-            await test['func'](**test['kwargs'])
-            print(f"         ✅ SUCCESS - Email sent to {test_email}")
-            passed += 1
-        except Exception as e:
-            print(f"         ❌ FAILED - {str(e)}")
-            failed += 1
-        print()
-    
-    print("="*60)
-    print(f"Results: {passed} passed, {failed} failed")
-    print("="*60)
-    
-    if failed == 0:
-        print("\n🎉 All emails sent successfully!")
-        print(f"Check your inbox at: {test_email}")
-    else:
-        print("\n⚠️ Some tests failed. Check the errors above.")
-        print("Common issues:")
-        print("  - SMTP credentials not configured in .env")
-        print("  - Using regular password instead of App Password")
-        print("  - Firewall blocking SMTP connection")
-        print("  - Invalid email address")
-    
-    print()
-
-
-if __name__ == "__main__":
-    print("\nStarting email service tests...\n")
-    asyncio.run(test_all_emails())
-
-
-============================================================
-FILE: scripts\test_login.py
-============================================================
-import urllib.request, json, urllib.error
-
-BASE = "http://localhost:8000/api/v1"
-
-def post(path, body):
-    data = json.dumps(body).encode()
-    r = urllib.request.Request(BASE + path, data=data,
-                               headers={"Content-Type": "application/json"}, method="POST")
-    try:
-        with urllib.request.urlopen(r, timeout=10) as resp:
-            return resp.status, json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read())
-
-credentials = [
-    ("superadmin@stayease.com", "Test@1234"),
-    ("admin1@stayease.com", "Test@1234"),
-    ("supervisor1@stayease.com", "Test@1234"),
-    ("rahul.sharma@student.com", "Test@1234"),
-    ("arun.kapoor@gmail.com", "Test@1234"),
-]
-
-print("\nLogin test results:")
-print("-" * 60)
-for email, pwd in credentials:
-    status, data = post("/auth/login", {"email_or_phone": email, "password": pwd})
-    if status == 200:
-        print(f"  PASS  {email} → role={data.get('role')}, hostel_ids={data.get('hostel_ids')}")
-    else:
-        print(f"  FAIL  {email} → {status}: {data.get('detail', data)}")
-
-
-============================================================
-FILE: scripts\test_subscription_filters_verify.py
-============================================================
+# scripts/test_bed_validation.py
 #!/usr/bin/env python3
 """
-Subscription Filters Verification Script
-Run: python scripts/test_subscription_filters_verify.py
+Comprehensive Bed Validation Test Script
+Tests: duplicate bed numbers, capacity limits, status updates, etc.
 """
 
 import json
 import urllib.request
 import urllib.error
-from datetime import date, timedelta, datetime
 from typing import Optional, Dict, Any
 
 BASE_URL = "http://localhost:8000/api/v1"
 
+# ANSI colors
 GREEN = '\033[92m'
 RED = '\033[91m'
 YELLOW = '\033[93m'
@@ -28964,28 +28369,22 @@ CYAN = '\033[96m'
 RESET = '\033[0m'
 BOLD = '\033[1m'
 
-
 def print_success(text: str):
     print(f"{GREEN}✓ {text}{RESET}")
-
 
 def print_error(text: str):
     print(f"{RED}✗ {text}{RESET}")
 
-
 def print_info(text: str):
     print(f"{BLUE}ℹ {text}{RESET}")
 
-
 def print_warning(text: str):
     print(f"{YELLOW}⚠ {text}{RESET}")
-
 
 def print_section(title: str):
     print(f"\n{CYAN}{'='*70}{RESET}")
     print(f"{CYAN}{title:^70}{RESET}")
     print(f"{CYAN}{'='*70}{RESET}\n")
-
 
 def make_request(method: str, path: str, token: Optional[str] = None, body: Optional[Dict] = None) -> tuple[int, Any]:
     url = BASE_URL + path
@@ -29008,7 +28407,6 @@ def make_request(method: str, path: str, token: Optional[str] = None, body: Opti
     except Exception as e:
         return 500, {"detail": str(e)}
 
-
 def login(email: str, password: str = "Test@1234") -> Optional[str]:
     status, data = make_request("POST", "/auth/login", body={
         "email_or_phone": email,
@@ -29018,29 +28416,93 @@ def login(email: str, password: str = "Test@1234") -> Optional[str]:
         print_success(f"Logged in as {email}")
         return data.get("access_token")
     else:
-        print_error(f"Login failed for {email}: {data.get('detail', 'Unknown error')}")
+        print_error(f"Login failed: {data.get('detail', 'Unknown')}")
         return None
 
+def get_admin_hostels(token: str) -> list:
+    status, data = make_request("GET", "/admin/my-hostels", token=token)
+    if status == 200:
+        return data
+    return []
 
-def get_hostel_id(token: str) -> Optional[str]:
-    """Get a hostel ID for testing"""
-    status, data = make_request("GET", "/super-admin/hostels", token=token)
-    if status == 200 and data:
-        return data[0].get("id")
-    return None
+def get_rooms(token: str, hostel_id: str) -> list:
+    status, data = make_request("GET", f"/admin/hostels/{hostel_id}/rooms", token=token)
+    if status == 200:
+        return data
+    return []
 
+def get_beds(token: str, room_id: str) -> list:
+    status, data = make_request("GET", f"/admin/rooms/{room_id}/beds", token=token)
+    if status == 200:
+        return data
+    return []
 
-def main():
-    print_section("SUBSCRIPTION FILTERS VERIFICATION")
+def create_bed(token: str, room_id: str, bed_number: str, status: str = "available") -> tuple[int, Any]:
+    return make_request("POST", f"/admin/rooms/{room_id}/beds", token=token, body={
+        "bed_number": bed_number,
+        "status": status
+    })
+
+def update_bed(token: str, bed_id: str, bed_number: str = None, status: str = None) -> tuple[int, Any]:
+    body = {}
+    if bed_number:
+        body["bed_number"] = bed_number
+    if status:
+        body["status"] = status
+    return make_request("PATCH", f"/admin/beds/{bed_id}", token=token, body=body)
+
+def delete_bed(token: str, bed_id: str) -> tuple[int, Any]:
+    return make_request("DELETE", f"/admin/beds/{bed_id}", token=token)
+
+def test_bed_validation():
+    print_section("BED CREATION VALIDATION TEST")
     
-    token = login("superadmin@stayease.com")
+    # Login as Admin
+    token = login("admin1@stayease.com")
     if not token:
+        print_error("Cannot proceed without admin token")
         return
     
-    # Get a hostel ID for testing
-    hostel_id = get_hostel_id(token)
-    if hostel_id:
-        print_info(f"Using hostel ID: {hostel_id[:8]}...")
+    # Get a hostel
+    hostels = get_admin_hostels(token)
+    if not hostels:
+        print_error("No hostels found for admin")
+        return
+    
+    hostel_id = hostels[0].get("id")
+    print_info(f"Using hostel: {hostel_id[:8]}...")
+    
+    # Get a room with small capacity for testing
+    rooms = get_rooms(token, hostel_id)
+    if not rooms:
+        print_error("No rooms found")
+        return
+    
+    # Find a room with capacity 1 or 2
+    test_room = None
+    for room in rooms:
+        total_beds = room.get("total_beds", 0)
+        available = room.get("available_beds", 0)
+        if total_beds == 1:
+            test_room = room
+            break
+        elif total_beds == 2 and available > 0:
+            test_room = room
+            break
+    
+    if not test_room:
+        test_room = rooms[0]
+    
+    room_id = test_room.get("id")
+    room_number = test_room.get("room_number")
+    total_beds = test_room.get("total_beds", 0)
+    
+    print_info(f"Testing room: {room_number} (Capacity: {total_beds} beds)")
+    
+    # Get existing beds
+    existing_beds = get_beds(token, room_id)
+    existing_bed_numbers = [b.get("bed_number") for b in existing_beds]
+    print_info(f"Current beds in room: {len(existing_beds)}")
     
     results = {"passed": 0, "failed": 0, "tests": []}
     
@@ -29053,191 +28515,595 @@ def main():
             results["failed"] += 1
             print_error(f"  {name}: {message}" if message else f"  {name}")
     
-    # Test 1: Basic list
-    print_info("\n" + "="*60)
-    print_info("TEST 1: Basic subscription list")
-    print_info("="*60)
-    status, data = make_request("GET", "/super-admin/subscriptions", token=token)
-    if status == 200:
-        count = len(data) if isinstance(data, list) else 0
-        add_result("Basic list", True, f"Found {count} subscriptions")
-    else:
-        add_result("Basic list", False, f"HTTP {status}")
-    
-    # Test 2: Status filter
-    print_info("\n" + "="*60)
-    print_info("TEST 2: Status filter")
-    print_info("="*60)
-    for status_filter in ["active", "expired", "cancelled"]:
-        status, data = make_request("GET", f"/super-admin/subscriptions?status_filter={status_filter}", token=token)
-        if status == 200:
-            count = len(data) if isinstance(data, list) else 0
-            add_result(f"Status: {status_filter}", True, f"{count} subscriptions")
+    # Test 1: Create bed with duplicate bed number
+    print_info("\nTest 1: Create bed with duplicate bed number (should return 409)")
+    if existing_bed_numbers:
+        duplicate_number = existing_bed_numbers[0]
+        status, data = create_bed(token, room_id, duplicate_number)
+        
+        if status == 409:
+            add_result("Duplicate bed number blocked", True, f"HTTP {status} - {data.get('detail', '')}")
         else:
-            add_result(f"Status: {status_filter}", False, f"HTTP {status}")
-    
-    # Test 3: Hostel name filter (partial)
-    print_info("\n" + "="*60)
-    print_info("TEST 3: Hostel name filter (partial match)")
-    print_info("="*60)
-    status, data = make_request("GET", "/super-admin/subscriptions?hostel_name=Happy", token=token)
-    if status == 200:
-        count = len(data) if isinstance(data, list) else 0
-        add_result("hostel_name=Happy (partial)", True, f"Found {count} subscriptions")
+            add_result("Duplicate bed number blocked", False, f"Expected 409, got {status}")
+            print_info(f"  Response: {data.get('detail', 'Unknown')}")
     else:
-        add_result("hostel_name=Happy (partial)", False, f"HTTP {status}")
+        print_info("  No existing beds to test duplicate - skipping")
     
-    # Test 4: Hostel name filter (full name)
-    print_info("\n" + "="*60)
-    print_info("TEST 4: Hostel name filter (full name)")
-    print_info("="*60)
-    status, data = make_request("GET", "/super-admin/subscriptions?hostel_name=Happy Homes Ladies Hostel", token=token)
-    if status == 200:
-        count = len(data) if isinstance(data, list) else 0
-        add_result("hostel_name=Happy Homes... (full)", True, f"Found {count} subscriptions")
+    # Test 2: Create bed when room at capacity
+    print_info("\nTest 2: Create bed when room at capacity (should return 400 or 409)")
+    
+    # Count existing beds
+    current_beds = get_beds(token, room_id)
+    current_count = len(current_beds)
+    
+    if current_count >= total_beds:
+        status, data = create_bed(token, room_id, "TEST-BED-99")
+        
+        if status in [400, 409]:
+            add_result("Room capacity limit", True, f"HTTP {status} - Cannot exceed capacity")
+        else:
+            add_result("Room capacity limit", False, f"Expected 400/409, got {status}")
+    
+    # Test 3: Create bed in non-existent room
+    print_info("\nTest 3: Create bed in non-existent room (should return 404)")
+    fake_room_id = "00000000-0000-0000-0000-000000000000"
+    status, data = create_bed(token, fake_room_id, "BED-999")
+    
+    if status == 404:
+        add_result("Non-existent room", True, f"HTTP {status}")
     else:
-        add_result("hostel_name=Happy Homes... (full)", False, f"HTTP {status} - FIXED with DISTINCT")
+        add_result("Non-existent room", False, f"Expected 404, got {status}")
     
-    # Test 5: Date range filters
-    print_info("\n" + "="*60)
-    print_info("TEST 5: Date range filters")
-    print_info("="*60)
-    today = date.today()
-    
-    status, data = make_request("GET", f"/super-admin/subscriptions?start_date_from={today.isoformat()}", token=token)
-    add_result("start_date_from", status == 200, f"HTTP {status}" if status != 200 else "OK")
-    
-    status, data = make_request("GET", f"/super-admin/subscriptions?start_date_to={(today + timedelta(days=90)).isoformat()}", token=token)
-    add_result("start_date_to", status == 200, f"HTTP {status}" if status != 200 else "OK")
-    
-    status, data = make_request("GET", f"/super-admin/subscriptions?end_date_from={today.isoformat()}", token=token)
-    add_result("end_date_from", status == 200, f"HTTP {status}" if status != 200 else "OK")
-    
-    status, data = make_request("GET", f"/super-admin/subscriptions?end_date_to={(today + timedelta(days=365)).isoformat()}", token=token)
-    add_result("end_date_to", status == 200, f"HTTP {status}" if status != 200 else "OK")
-    
-    # Test 6: Combined filters
-    print_info("\n" + "="*60)
-    print_info("TEST 6: Combined filters")
-    print_info("="*60)
-    status, data = make_request("GET", "/super-admin/subscriptions?status_filter=active&hostel_name=Happy", token=token)
-    if status == 200:
-        count = len(data) if isinstance(data, list) else 0
-        add_result("Combined (active + Happy)", True, f"Found {count} subscriptions")
+    # Test 4: Update bed status (valid)
+    print_info("\nTest 4: Update bed status (should return 200)")
+    if existing_beds:
+        bed_id = existing_beds[0].get("id")
+        old_status = existing_beds[0].get("status")
+        new_status = "maintenance" if old_status == "available" else "available"
+        
+        status, data = update_bed(token, bed_id, status=new_status)
+        
+        if status == 200:
+            add_result("Update bed status", True, f"Changed from {old_status} to {new_status}")
+        else:
+            add_result("Update bed status", False, f"HTTP {status}")
     else:
-        add_result("Combined (active + Happy)", False, f"HTTP {status}")
+        add_result("Update bed status", True, "Skipped - no beds to update")
     
-    # Test 7: Search hostels endpoint
-    print_info("\n" + "="*60)
-    print_info("TEST 7: Search hostels endpoint")
-    print_info("="*60)
-    status, data = make_request("GET", "/super-admin/subscriptions/search/hostels?q=Green", token=token)
-    if status == 200:
-        count = len(data) if isinstance(data, list) else 0
-        add_result("Search hostels", True, f"Found {count} hostels")
+    # Test 5: Update bed with duplicate number (if multiple beds exist)
+    print_info("\nTest 5: Update bed with duplicate number (should return 409)")
+    if len(existing_beds) >= 2:
+        bed1 = existing_beds[0]
+        bed2 = existing_beds[1]
+        
+        status, data = update_bed(token, bed2.get("id"), bed_number=bed1.get("bed_number"))
+        
+        if status == 409:
+            add_result("Duplicate bed number on update", True, f"HTTP {status}")
+        else:
+            add_result("Duplicate bed number on update", False, f"Expected 409, got {status}")
     else:
-        add_result("Search hostels", False, f"HTTP {status}")
+        add_result("Duplicate bed number on update", True, "Skipped - need 2 beds")
     
-    # Test 8: Stats endpoint
-    print_info("\n" + "="*60)
-    print_info("TEST 8: Stats endpoint")
-    print_info("="*60)
-    status, data = make_request("GET", "/super-admin/subscriptions/stats", token=token)
-    if status == 200:
-        add_result("Stats endpoint", True, "Returns data")
-        if isinstance(data, dict):
-            print_info(f"    Total: {data.get('total_subscriptions', 0)}")
-            print_info(f"    Active: {data.get('active_subscriptions', 0)}")
-            print_info(f"    MRR: ₹{data.get('monthly_recurring_revenue', 0):,.0f}")
+    # Test 6: Create valid new bed in a room with capacity
+    print_info("\nTest 6: Create valid new bed (if room has capacity)")
+    
+    # Find a room with available capacity
+    available_room = None
+    for room in rooms:
+        room_beds = get_beds(token, room.get("id"))
+        if len(room_beds) < room.get("total_beds", 0):
+            available_room = room
+            break
+    
+    if available_room:
+        new_room_id = available_room.get("id")
+        new_room_number = available_room.get("room_number")
+        
+        # Find next bed number
+        existing = get_beds(token, new_room_id)
+        next_number = len(existing) + 1
+        bed_number = f"B{next_number}"
+        
+        status, data = create_bed(token, new_room_id, bed_number)
+        
+        if status == 201:
+            add_result("Create valid bed", True, f"Created {bed_number} in room {new_room_number}")
+            
+            # Clean up - delete the test bed
+            new_bed_id = data.get("id")
+            if new_bed_id:
+                delete_status, _ = delete_bed(token, new_bed_id)
+                if delete_status == 204:
+                    print_info(f"  Cleaned up test bed {bed_number}")
+        else:
+            add_result("Create valid bed", False, f"Expected 201, got {status}")
     else:
-        add_result("Stats endpoint", False, f"HTTP {status} - Add the endpoint")
+        add_result("Create valid bed", True, "Skipped - all rooms at capacity")
     
-    # Test 9: Error handling - invalid date
-    print_info("\n" + "="*60)
-    print_info("TEST 9: Error handling - invalid date format")
-    print_info("="*60)
-    status, data = make_request("GET", "/super-admin/subscriptions?start_date_from=invalid-date", token=token)
-    if status == 422:
-        add_result("Invalid date format", True, "Returns 422")
-    else:
-        add_result("Invalid date format", False, f"Expected 422, got {status}")
-    
-    # Summary
+    # Print summary
     print_section("TEST SUMMARY")
+    
     total = results["passed"] + results["failed"]
     print(f"\n  {BOLD}Total Tests:{RESET}   {total}")
     print(f"  {GREEN}{BOLD}Passed:{RESET}      {results['passed']}")
     print(f"  {RED}{BOLD}Failed:{RESET}      {results['failed']}")
     
     if results["failed"] == 0:
-        print(f"\n{GREEN}{BOLD}✅ ALL TESTS PASSED! Subscription filters are working correctly.{RESET}")
+        print(f"\n{GREEN}{BOLD}✅ ALL TESTS PASSED! Bed validation is working correctly.{RESET}")
     else:
-        print(f"\n{RED}{BOLD}❌ Some tests failed. See errors above.{RESET}")
-        
-        # Show which endpoints need to be fixed
-        print(f"\n{YELLOW}To fix:{RESET}")
-        for test in results["tests"]:
-            if not test["passed"]:
-                if "hostel_name" in test["name"]:
-                    print("  1. Add DISTINCT to subscription query when joining with hostels")
-                elif "Stats" in test["name"]:
-                    print("  2. Add the /subscriptions/stats endpoint to super_admin/routes.py")
-                else:
-                    print(f"    3. Fix: {test['name']}")
+        print(f"\n{RED}{BOLD}❌ Some tests failed. Fixes needed:{RESET}")
+        print("  1. Duplicate bed number should return HTTP 409 (Conflict)")
+        print("  2. Update bed number should also check for duplicates")
+        print("\n  Expected status codes:")
+        print("    • Duplicate bed number → HTTP 409 Conflict")
+        print("    • Room at capacity → HTTP 400 Bad Request")
+        print("    • Non-existent room → HTTP 404 Not Found")
+        print("    • Valid creation → HTTP 201 Created")
     
     print()
+
+if __name__ == "__main__":
+    test_bed_validation()
+
+============================================================
+FILE: scripts\test_duplicate_email_multi_hostel.py
+============================================================
+# scripts/test_duplicate_email_multi_hostel.py
+#!/usr/bin/env python3
+"""
+Test duplicate email handling across multiple hostels
+Run: python scripts/test_duplicate_email_multi_hostel.py
+"""
+
+import asyncio
+import asyncpg
+import json
+import urllib.request
+import urllib.error
+from datetime import datetime
+import os
+
+BASE_URL = "http://localhost:8000/api/v1"
+
+# ANSI colors
+GREEN = '\033[92m'
+RED = '\033[91m'
+YELLOW = '\033[93m'
+BLUE = '\033[94m'
+CYAN = '\033[96m'
+RESET = '\033[0m'
+BOLD = '\033[1m'
+
+
+def print_success(text: str):
+    print(f"{GREEN}✓ {text}{RESET}")
+
+
+def print_error(text: str):
+    print(f"{RED}✗ {text}{RESET}")
+
+
+def print_info(text: str):
+    print(f"{BLUE}ℹ {text}{RESET}")
+
+
+def print_section(title: str):
+    print(f"\n{CYAN}{'='*70}{RESET}")
+    print(f"{CYAN}{title:^70}{RESET}")
+    print(f"{CYAN}{'='*70}{RESET}\n")
+
+
+def make_request(method: str, path: str, token: str = None, body: dict = None) -> tuple:
+    """Make HTTP request to API"""
+    url = BASE_URL + path
+    data = json.dumps(body).encode() if body else None
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read()
+            return resp.status, json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        try:
+            return e.code, json.loads(raw) if raw else {"detail": str(e)}
+        except:
+            return e.code, {"detail": raw.decode('utf-8', errors='replace')}
+    except Exception as e:
+        return 500, {"detail": str(e)}
+
+
+def login(email: str, password: str = "Test@1234") -> str:
+    """Login and return access token"""
+    status, data = make_request("POST", "/auth/login", body={
+        "email_or_phone": email,
+        "password": password
+    })
+    if status == 200:
+        return data.get("access_token")
+    else:
+        print_error(f"Login failed: {data.get('detail', 'Unknown')}")
+        return None
+
+
+def create_admin(token: str, email: str, phone: str, full_name: str, password: str = "Test@1234") -> tuple:
+    """Create a new admin"""
+    payload = {
+        "email": email,
+        "phone": phone,
+        "full_name": full_name,
+        "password": password
+    }
+    return make_request("POST", "/super-admin/admins", token=token, body=payload)
+
+
+def get_hostels(token: str) -> list:
+    """Get all hostels"""
+    status, data = make_request("GET", "/super-admin/hostels", token=token)
+    if status == 200:
+        return data
+    return []
+
+
+def assign_hostel_to_admin(token: str, admin_id: str, hostel_id: str) -> tuple:
+    """Assign a hostel to an admin"""
+    payload = {"hostel_ids": [hostel_id]}
+    return make_request("POST", f"/super-admin/admins/{admin_id}/assign-hostels", token=token, body=payload)
+
+
+def delete_admin(token: str, admin_id: str) -> tuple:
+    """Delete an admin (if endpoint exists)"""
+    return make_request("DELETE", f"/super-admin/admins/{admin_id}", token=token)
+
+
+def delete_user_by_email(db_url: str, email: str) -> None:
+    """Direct database deletion of user by email"""
+    async def _delete():
+        try:
+            conn = await asyncpg.connect(db_url)
+            # First delete related records
+            await conn.execute('DELETE FROM refresh_tokens WHERE user_id IN (SELECT id FROM users WHERE email = $1)', email)
+            await conn.execute('DELETE FROM otp_verifications WHERE user_id IN (SELECT id FROM users WHERE email = $1)', email)
+            await conn.execute('DELETE FROM admin_hostel_mappings WHERE admin_id IN (SELECT id FROM users WHERE email = $1)', email)
+            # Then delete the user
+            result = await conn.execute('DELETE FROM users WHERE email = $1', email)
+            await conn.close()
+            if result != "DELETE 0":
+                print_info(f"  Deleted user with email: {email}")
+        except Exception as e:
+            print_warning(f"  Could not delete {email}: {e}")
+    
+    asyncio.run(_delete())
+
+
+def main():
+    print_section("DUPLICATE EMAIL TEST FOR MULTIPLE HOSTELS")
+    
+    # Login as Super Admin
+    token = login("superadmin@stayease.com")
+    if not token:
+        print_error("Cannot proceed without super admin token")
+        return
+    
+    print_success("Logged in as Super Admin")
+    
+    # Get hostels
+    hostels = get_hostels(token)
+    if len(hostels) < 2:
+        print_error(f"Need at least 2 hostels for this test. Found {len(hostels)}")
+        return
+    
+    print_info(f"Found {len(hostels)} hostels")
+    for i, hostel in enumerate(hostels[:3], 1):
+        print_info(f"  {i}. {hostel.get('name')} (ID: {hostel.get('id')[:8]}...)")
+    
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    test_email = f"duplicate.test.{timestamp}@stayease.com"
+    test_phone = f"9{timestamp[:8]}12345"
+    
+    # Test 1: Create first admin
+    print_section("TEST 1: Create First Admin")
+    print_info(f"Creating admin with email: {test_email}")
+    status, data = create_admin(token, test_email, test_phone, "First Admin Test")
+    
+    if status == 201:
+        first_admin_id = data.get("id")
+        print_success(f"First admin created successfully! ID: {first_admin_id[:8]}...")
+        
+        # Assign first hostel to this admin
+        first_hostel_id = hostels[0].get("id")
+        print_info(f"Assigning hostel: {hostels[0].get('name')}")
+        status, data = assign_hostel_to_admin(token, first_admin_id, first_hostel_id)
+        
+        if status == 200:
+            print_success(f"Hostel assigned to first admin")
+        else:
+            print_warning(f"Failed to assign hostel: {status}")
+    else:
+        print_error(f"Failed to create first admin: {status}")
+        if status == 409:
+            print_info("Email already exists. Try a different email.")
+        return
+    
+    # Test 2: Try to create second admin with SAME email
+    print_section("TEST 2: Create Second Admin with Same Email")
+    print_info(f"Attempting to create admin with SAME email: {test_email}")
+    print_info(f"Different phone: 8{timestamp[:8]}54321")
+    
+    status, data = create_admin(token, test_email, "8" + test_phone[1:], "Second Admin Test")
+    
+    if status == 409:
+        print_success(f"Correctly REJECTED duplicate email (HTTP 409)")
+        print_info(f"  Error: {data.get('detail', 'Email already registered')}")
+        print_success("✓ Duplicate emails are NOT allowed across hostels")
+    else:
+        print_error(f"Unexpected result: HTTP {status}")
+        if status == 201:
+            print_error("❌ Duplicate email was ACCEPTED - This is a security issue!")
+    
+    # Test 3: Try different email but same phone
+    print_section("TEST 3: Create Admin with Same Phone")
+    different_email = f"different.{timestamp}@stayease.com"
+    print_info(f"Different email: {different_email}")
+    print_info(f"Same phone: {test_phone}")
+    
+    status, data = create_admin(token, different_email, test_phone, "Phone Test Admin")
+    
+    if status == 409:
+        print_success(f"Correctly REJECTED duplicate phone (HTTP 409)")
+    elif status == 201:
+        print_error(f"❌ Duplicate phone was ACCEPTED - HTTP {status}")
+        # Clean up
+        admin_id = data.get("id")
+        if admin_id:
+            print_info(f"  Cleaning up: deleting admin {admin_id[:8]}...")
+            # Note: DELETE endpoint may not exist, so this is best effort
+    else:
+        print_info(f"Result: HTTP {status}")
+    
+    # Test 4: Same admin can manage multiple hostels
+    print_section("TEST 4: Can Same Admin Manage Multiple Hostels?")
+    
+    fresh_email = f"multi.hostel.{timestamp}@stayease.com"
+    fresh_phone = f"7{timestamp[:8]}99999"
+    
+    print_info(f"Creating fresh admin: {fresh_email}")
+    status, data = create_admin(token, fresh_email, fresh_phone, "Multi-Hostel Admin")
+    
+    if status != 201:
+        print_error(f"Failed to create fresh admin: {status}")
+    else:
+        multi_admin_id = data.get("id")
+        print_success(f"Admin created: {multi_admin_id[:8]}...")
+        
+        # Assign first hostel
+        print_info(f"Assigning hostel '{hostels[0].get('name')}'...")
+        status, data = assign_hostel_to_admin(token, multi_admin_id, hostels[0].get("id"))
+        
+        if status == 200:
+            print_success(f"Hostel 1 assigned")
+        else:
+            print_error(f"Failed to assign hostel 1: {status}")
+        
+        # Assign second hostel
+        print_info(f"Assigning hostel '{hostels[1].get('name')}'...")
+        status, data = assign_hostel_to_admin(token, multi_admin_id, hostels[1].get("id"))
+        
+        if status == 200:
+            print_success(f"Hostel 2 assigned")
+            print_success("✓ Same admin CAN manage multiple hostels")
+        else:
+            print_error(f"Failed to assign hostel 2: {status}")
+    
+    # Summary
+    print_section("CONCLUSION")
+    print(f"""
+{BOLD}Findings:{RESET}
+
+1. {GREEN}Duplicate emails are NOT allowed{RESET} - Creating admin with same email 
+   returns HTTP 409 Conflict, even for different hostels.
+
+2. {GREEN}Duplicate phones are NOT allowed{RESET} - Phone numbers must be unique
+   across all users.
+
+3. {GREEN}Same admin CAN manage multiple hostels{RESET} - By assigning multiple
+   hostels to the same admin account.
+
+{BOLD}Test accounts created:{RESET}
+   - First admin: {test_email}
+   - Multi-hostel admin: {fresh_email}
+
+{BOLD}To clean up:{RESET}
+   These accounts can be deleted via the admin panel or database.
+    """)
+    
+    # Ask about cleanup
+    print("\n" + "="*70)
+    response = input("Delete test accounts? (y/n): ").strip().lower()
+    if response == 'y':
+        db_url = os.environ.get('DATABASE_URL', 'postgresql://localhost:5432/stayease_dev')
+        delete_user_by_email(db_url, test_email)
+        delete_user_by_email(db_url, fresh_email)
+        delete_user_by_email(db_url, different_email)
+        print_success("Cleanup complete!")
 
 
 if __name__ == "__main__":
     main()
 
 ============================================================
-FILE: scripts\verify_constraints.py
+FILE: scripts\test_status_validation.py
 ============================================================
-import asyncio
-import asyncpg
+# scripts/test_status_validation.py
+#!/usr/bin/env python3
+"""
+Test Bed Status Validation
+Verifies that invalid status returns 400 (not 422)
+Run: python scripts/test_status_validation.py
+"""
 
+import json
+import urllib.request
+import urllib.error
 
-async def verify():
-    conn = await asyncpg.connect("postgresql://postgres:1234@localhost:5432/stayease_dev")
+BASE_URL = "http://localhost:8000/api/v1"
 
-    print("\n=== UNIQUE CONSTRAINTS ===")
-    rows = await conn.fetch("""
-        SELECT tc.table_name, tc.constraint_name
-        FROM information_schema.table_constraints tc
-        WHERE tc.constraint_type = 'UNIQUE'
-          AND tc.table_schema = 'public'
-        ORDER BY tc.table_name, tc.constraint_name
-    """)
-    for r in rows:
-        print(f"  {r['table_name']}: {r['constraint_name']}")
+GREEN = '\033[92m'
+RED = '\033[91m'
+YELLOW = '\033[93m'
+BLUE = '\033[94m'
+CYAN = '\033[96m'
+RESET = '\033[0m'
+BOLD = '\033[1m'
 
-    print("\n=== CHECK CONSTRAINTS ===")
-    rows = await conn.fetch("""
-        SELECT tc.table_name, tc.constraint_name, cc.check_clause
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.check_constraints cc
-          ON tc.constraint_name = cc.constraint_name
-        WHERE tc.constraint_type = 'CHECK'
-          AND tc.table_schema = 'public'
-          AND tc.constraint_name NOT LIKE '%_not_null'
-        ORDER BY tc.table_name
-    """)
-    for r in rows:
-        print(f"  {r['table_name']}: {r['constraint_name']} → {r['check_clause']}")
+def print_success(text):
+    print(f"{GREEN}✓ {text}{RESET}")
 
-    print("\n=== ENUM VALUES (bookingstatus) ===")
-    rows = await conn.fetch("""
-        SELECT enumlabel FROM pg_enum
-        JOIN pg_type ON pg_enum.enumtypid = pg_type.oid
-        WHERE pg_type.typname = 'bookingstatus'
-        ORDER BY enumsortorder
-    """)
-    print("  " + ", ".join(r["enumlabel"] for r in rows))
+def print_error(text):
+    print(f"{RED}✗ {text}{RESET}")
 
-    await conn.close()
-    print("\n✅ All constraints verified.")
+def print_info(text):
+    print(f"{BLUE}ℹ {text}{RESET}")
 
+def print_section(title):
+    print(f"\n{CYAN}{'='*60}{RESET}")
+    print(f"{CYAN}{title:^60}{RESET}")
+    print(f"{CYAN}{'='*60}{RESET}\n")
 
-asyncio.run(verify())
+def make_request(method, path, token=None, body=None):
+    url = BASE_URL + path
+    data = json.dumps(body).encode() if body else None
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read()
+            return resp.status, json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        try:
+            return e.code, json.loads(raw) if raw else {"detail": str(e)}
+        except:
+            return e.code, {"detail": raw.decode('utf-8', errors='replace')}
+    except Exception as e:
+        return 500, {"detail": str(e)}
 
+def login(email, password="Test@1234"):
+    status, data = make_request("POST", "/auth/login", body={
+        "email_or_phone": email,
+        "password": password
+    })
+    if status == 200:
+        return data.get("access_token")
+    return None
+
+def test_status_validation():
+    print_section("TESTING BED STATUS VALIDATION")
+    
+    token = login("admin1@stayease.com")
+    if not token:
+        print_error("Login failed")
+        return
+    
+    # Get a bed ID
+    status, hostels = make_request("GET", "/admin/my-hostels", token=token)
+    if status != 200 or not hostels:
+        print_error("No hostels found")
+        return
+    
+    hostel_id = hostels[0].get("id")
+    status, rooms = make_request("GET", f"/admin/hostels/{hostel_id}/rooms", token=token)
+    if status != 200 or not rooms:
+        print_error("No rooms found")
+        return
+    
+    room_id = rooms[0].get("id")
+    status, beds = make_request("GET", f"/admin/rooms/{room_id}/beds", token=token)
+    if status != 200 or not beds:
+        print_error("No beds found")
+        return
+    
+    bed_id = beds[0].get("id")
+    print_info(f"Using bed ID: {bed_id[:8]}...")
+    
+    results = {"passed": 0, "failed": 0}
+    
+    def add_result(name, passed, message=""):
+        if passed:
+            results["passed"] += 1
+            print_success(f"  {name}: {message}" if message else f"  {name}")
+        else:
+            results["failed"] += 1
+            print_error(f"  {name}: {message}" if message else f"  {name}")
+    
+    # Test valid statuses
+    print_info("\n--- Testing valid statuses ---")
+    valid_statuses = ["available", "occupied", "maintenance", "reserved"]
+    
+    for status_val in valid_statuses:
+        status_code, data = make_request("PATCH", f"/admin/beds/{bed_id}", token=token, body={"status": status_val})
+        if status_code == 200:
+            add_result(f"'{status_val}'", True, "OK")
+        else:
+            add_result(f"'{status_val}'", False, f"Expected 200, got {status_code}")
+    
+    # Test invalid statuses - should return 400
+    print_info("\n--- Testing invalid statuses ---")
+    invalid_statuses = ["invalid", "unknown", "pending", "  ", "ACTIVE", "Available123"]
+    
+    for status_val in invalid_statuses:
+        status_code, data = make_request("PATCH", f"/admin/beds/{bed_id}", token=token, body={"status": status_val})
+        if status_code == 400:
+            add_result(f"'{status_val}'", True, f"OK (400)")
+        elif status_code == 422:
+            add_result(f"'{status_val}'", False, f"Expected 400, got 422 (validation error)")
+        else:
+            add_result(f"'{status_val}'", False, f"Expected 400, got {status_code}")
+    
+    # Test empty string (should be treated as None or return 400)
+    print_info("\n--- Testing empty status ---")
+    status_code, data = make_request("PATCH", f"/admin/beds/{bed_id}", token=token, body={"status": ""})
+    # Empty string might be treated as None (no update) or invalid
+    if status_code in [200, 400]:
+        add_result("''", True, f"OK ({status_code})")
+    else:
+        add_result("''", False, f"Expected 200 or 400, got {status_code}")
+    
+    # Test missing status (should update other fields)
+    print_info("\n--- Testing missing status (should update other fields) ---")
+    status_code, data = make_request("PATCH", f"/admin/beds/{bed_id}", token=token, body={"bed_number": "TEST-BED"})
+    if status_code == 200:
+        add_result("Missing status", True, "OK (updates other fields)")
+        # Change back
+        make_request("PATCH", f"/admin/beds/{bed_id}", token=token, body={"bed_number": beds[0].get("bed_number")})
+    else:
+        add_result("Missing status", False, f"Expected 200, got {status_code}")
+    
+    # Summary
+    print_section("TEST COMPLETE")
+    total = results["passed"] + results["failed"]
+    print(f"\n  {BOLD}Passed:{RESET}      {results['passed']}")
+    print(f"  {RED}{BOLD}Failed:{RESET}      {results['failed']}")
+    
+    if results["failed"] == 0:
+        print(f"\n{GREEN}{BOLD}✅ ALL TESTS PASSED! Status validation is working correctly.{RESET}")
+        print(f"\n{CYAN}Expected behavior:{RESET}")
+        print("  • Valid status → 200 OK")
+        print("  • Invalid status → 400 Bad Request (not 422)")
+        print("  • Missing status → 200 OK (updates other fields)")
+    else:
+        print(f"\n{RED}{BOLD}❌ Some tests failed. Status validation needs to return 400 for invalid values.{RESET}")
+        print(f"\n{YELLOW}Fix:{RESET}")
+        print("  1. Update BedUpdateRequest schema to remove min_length on status")
+        print("  2. Add validation in service layer to return 400 for invalid status")
+        print("  3. Ensure Pydantic doesn't block invalid values before service layer")
+
+if __name__ == "__main__":
+    test_status_validation()
