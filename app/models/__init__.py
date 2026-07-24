@@ -11,6 +11,7 @@ from app.models.hostel import (  # noqa: F401
     HostelType,
     SupervisorHostelMapping,
     VisitorFavorite,
+    HostelPaymentConfig,
 )
 from app.models.room import Bed, BedStatus, Room, RoomType  # noqa: F401
 from app.models.booking import (  # noqa: F401
@@ -47,7 +48,7 @@ __all__ = [
     # hostel
     "Hostel", "HostelType", "HostelStatus",
     "HostelAmenity", "HostelImage",
-    "AdminHostelMapping", "SupervisorHostelMapping", "VisitorFavorite",
+    "AdminHostelMapping", "SupervisorHostelMapping", "VisitorFavorite", "HostelPaymentConfig",
     # room
     "Room", "RoomType", "Bed", "BedStatus",
     # booking

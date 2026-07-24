@@ -51,9 +51,23 @@ class PaymentWriteService:
             )
             await self.session.flush()
 
+        # Fetch Hostel Razorpay Keys
+        from app.services.payment_config_service import PaymentConfigService
+        hostel_keys = await PaymentConfigService(self.session).get_decrypted_keys(str(booking.hostel_id))
+        if not hostel_keys:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="This hostel has not configured online payments yet. Please contact the hostel admin."
+            )
+            
+        razorpay_client = RazorpayClient(
+            key_id=hostel_keys["key_id"],
+            key_secret=hostel_keys["key_secret"]
+        )
+
         # Create Razorpay order
         try:
-            order = self.razorpay.create_order(
+            order = razorpay_client.create_order(
                 amount=payload.booking_advance,
                 receipt=str(booking.booking_number),
                 notes={"booking_id": str(booking.id), "visitor_id": actor_id},
@@ -87,6 +101,7 @@ class PaymentWriteService:
         payload: dict,
         signature: str | None,
         raw_body: bytes | None = None,
+        hostel_id: str | None = None,
     ) -> dict:
         """
         Handle Razorpay payment webhook events with idempotency.
@@ -103,11 +118,23 @@ class PaymentWriteService:
         - payment.failed: Mark payment as failed
         - order.paid: Additional confirmation
         """
+        # Get specific Razorpay Client for this webhook (if hostel_id provided)
+        razorpay_client = self.razorpay
+        if hostel_id:
+            from app.services.payment_config_service import PaymentConfigService
+            hostel_keys = await PaymentConfigService(self.session).get_decrypted_keys(hostel_id)
+            if hostel_keys:
+                razorpay_client = RazorpayClient(
+                    key_id=hostel_keys["key_id"],
+                    key_secret=hostel_keys["key_secret"],
+                    webhook_secret=hostel_keys["webhook_secret"]
+                )
+
         # Step 1: Verify signature
         is_valid_signature = (
-            self.razorpay.verify_webhook_signature(raw_body, signature)
+            razorpay_client.verify_webhook_signature(raw_body, signature)
             if raw_body is not None
-            else self.razorpay.verify_signature(payload, signature)
+            else razorpay_client.verify_signature(payload, signature)
         )
         if not is_valid_signature:
             raise HTTPException(
@@ -345,9 +372,23 @@ class PaymentWriteService:
                 detail=f"No remaining balance to pay. Booking is fully paid (₹{grand_total:.2f}).",
             )
 
-        # 4. Create Razorpay order
+        # 4. Fetch Hostel Razorpay Keys
+        from app.services.payment_config_service import PaymentConfigService
+        hostel_keys = await PaymentConfigService(self.session).get_decrypted_keys(str(booking.hostel_id))
+        if not hostel_keys:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="This hostel has not configured online payments yet. Please contact the hostel admin."
+            )
+            
+        razorpay_client = RazorpayClient(
+            key_id=hostel_keys["key_id"],
+            key_secret=hostel_keys["key_secret"]
+        )
+
+        # 5. Create Razorpay order
         try:
-            order = self.razorpay.create_order(
+            order = razorpay_client.create_order(
                 amount=remaining,
                 receipt=str(booking.booking_number),
                 notes={

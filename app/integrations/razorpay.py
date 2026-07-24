@@ -14,11 +14,11 @@ logger = logging.getLogger(__name__)
 
 
 class RazorpayClient:
-    def __init__(self) -> None:
+    def __init__(self, key_id: str | None = None, key_secret: str | None = None, webhook_secret: str | None = None) -> None:
         settings = get_settings()
-        self.key_id = settings.razorpay_key_id
-        self.key_secret = settings.razorpay_key_secret
-        self.webhook_secret = settings.razorpay_webhook_secret or self.key_secret
+        self.key_id = key_id or settings.razorpay_key_id
+        self.key_secret = key_secret or settings.razorpay_key_secret
+        self.webhook_secret = webhook_secret or settings.razorpay_webhook_secret or self.key_secret
         self._client = None
         self._configured = bool(
             self.key_id and self.key_id not in ("", "rzp_test_xxxxx", "rzp_live_xxxxx")

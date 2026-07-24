@@ -13,6 +13,7 @@ async def razorpay_webhook(
     request: Request,
     db: DBSession,
     x_razorpay_signature: str | None = Header(default=None),
+    hostel_id: str | None = None,
 ):
     """
     **Razorpay payment webhook.**
@@ -42,4 +43,5 @@ async def razorpay_webhook(
         payload=payload,
         signature=x_razorpay_signature,
         raw_body=raw_body,
+        hostel_id=hostel_id,
     )
