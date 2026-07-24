@@ -16,7 +16,6 @@ class PaymentWriteService:
         self.session = session
         self.repository = PaymentWriteRepository(session)
         self.booking_repository = BookingRepository(session)
-        self.razorpay = RazorpayClient()
 
     async def create_booking_payment(
         self,
@@ -119,7 +118,6 @@ class PaymentWriteService:
         - order.paid: Additional confirmation
         """
         # Get specific Razorpay Client for this webhook (if hostel_id provided)
-        razorpay_client = self.razorpay
         if hostel_id:
             from app.services.payment_config_service import PaymentConfigService
             hostel_keys = await PaymentConfigService(self.session).get_decrypted_keys(hostel_id)
@@ -129,6 +127,10 @@ class PaymentWriteService:
                     key_secret=hostel_keys["key_secret"],
                     webhook_secret=hostel_keys["webhook_secret"]
                 )
+            else:
+                razorpay_client = RazorpayClient()
+        else:
+            razorpay_client = RazorpayClient()
 
         # Step 1: Verify signature
         is_valid_signature = (

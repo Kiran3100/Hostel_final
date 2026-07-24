@@ -1312,3 +1312,12 @@ async def list_hostel_payments(
         "page": page,
         "per_page": per_page,
     }
+
+
+from app.services.payment_config_service import PaymentConfigService
+from app.schemas.payment_config import HostelPaymentConfigResponse
+
+@router.get("/hostels/{hostel_id}/payment-config", response_model=HostelPaymentConfigResponse, tags=["Payment Settings"])
+async def get_hostel_payment_config(hostel_id: str, _: SuperAdmin, db: DBSession):
+    """View payment config status for a specific hostel (Super Admin only)."""
+    return await PaymentConfigService(db).get_payment_config(hostel_id)
