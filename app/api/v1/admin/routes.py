@@ -1890,4 +1890,165 @@ async def get_payment_config(hostel_id: str, current_user: AdminUser, db: DBSess
 @router.put("/payment-config", response_model=HostelPaymentConfigResponse, tags=["Payment Settings"])
 async def update_payment_config(hostel_id: str, payload: HostelPaymentConfigUpdate, current_user: AdminUser, db: DBSession):
     _check_hostel(current_user, hostel_id)
-    return await PaymentConfigService(db).upsert_payment_config(hostel_id, payload)
+    return await PaymentConfigService(db).upsert_payment_config(hostel_id, payload)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# BILLING / PLANS  — SaaS Subscription for Hostel Admins
+# ═══════════════════════════════════════════════════════════════════════════════
+
+from app.services.billing_service import BillingService
+from app.schemas.billing import (
+    AvailablePlanItem,
+    CurrentPlanResponse,
+    SelectPlanRequest,
+    SelectPlanResponse,
+    CreateOrderRequest,
+    CreateOrderResponse,
+    VerifyPaymentRequest,
+    VerifyPaymentResponse,
+    BillingHistoryResponse,
+    InvoiceResponse,
+)
+from typing import Optional
+from fastapi.responses import HTMLResponse
+
+
+@router.get("/plans", tags=["Billing"])
+async def list_admin_plans(current_user: AdminUser, db: DBSession):
+    """
+    **[Hostel Admin] List all active subscription plans.**
+
+    Returns every active plan from the database — no hardcoded values.
+    Used to populate the Available Plans section on the billing page.
+    """
+    return await BillingService(db).get_available_plans()
+
+
+@router.get("/subscription/current", response_model=CurrentPlanResponse, tags=["Billing"])
+async def get_current_subscription(
+    current_user: AdminUser,
+    db: DBSession,
+    hostel_id: Optional[str] = None,
+):
+    """
+    **[Hostel Admin] Get the active subscription for this admin's hostel.**
+
+    Returns plan name, billing cycle, start/expiry date, amount, status, and last payment info.
+    Pass hostel_id as query param for multi-hostel admins.
+    """
+    return await BillingService(db).get_current_subscription(
+        admin_user_id=current_user.id,
+        hostel_id=hostel_id,
+    )
+
+
+@router.post("/subscription/select", response_model=SelectPlanResponse, tags=["Billing"])
+async def select_plan(
+    payload: SelectPlanRequest,
+    current_user: AdminUser,
+    db: DBSession,
+):
+    """
+    **[Hostel Admin] Select a plan to see checkout details.**
+
+    Validates the plan is active and returns amount, duration, and feature list.
+    Frontend shows this in the Checkout panel before the user clicks Pay Now.
+    """
+    return await BillingService(db).select_plan(
+        plan_id=payload.plan_id,
+        admin_user_id=current_user.id,
+        hostel_id=payload.hostel_id,
+    )
+
+
+@router.post("/billing/create-order", response_model=CreateOrderResponse, tags=["Billing"])
+async def create_billing_order(
+    payload: CreateOrderRequest,
+    current_user: AdminUser,
+    db: DBSession,
+):
+    """
+    **[Hostel Admin] Create a Razorpay order for a subscription payment.**
+
+    IMPORTANT: Always uses the Super Admin's Razorpay account (platform keys),
+    NOT the Hostel Admin's Razorpay credentials.
+
+    Returns order_id + key_id for the frontend to open Razorpay checkout.
+    Also creates a pending BillingPayment record in the database.
+    """
+    return await BillingService(db).create_razorpay_order(
+        plan_id=payload.plan_id,
+        admin_user_id=current_user.id,
+        hostel_id=payload.hostel_id,
+    )
+
+
+@router.post("/billing/verify-payment", response_model=VerifyPaymentResponse, tags=["Billing"])
+async def verify_billing_payment(
+    payload: VerifyPaymentRequest,
+    current_user: AdminUser,
+    db: DBSession,
+):
+    """
+    **[Hostel Admin] Verify Razorpay payment and activate subscription.**
+
+    Processing flow:
+    1. Verify Razorpay payment signature
+    2. Prevent duplicate payment processing
+    3. Deactivate any previous active subscription
+    4. Create new active subscription
+    5. Record the payment as captured
+    6. Generate an invoice
+    7. Return success with subscription_id and invoice_id
+
+    On failure: transaction is rolled back, payment is marked failed.
+    """
+    return await BillingService(db).verify_and_activate(
+        billing_payment_id=payload.billing_payment_id,
+        razorpay_order_id=payload.razorpay_order_id,
+        razorpay_payment_id=payload.razorpay_payment_id,
+        razorpay_signature=payload.razorpay_signature,
+        admin_user_id=current_user.id,
+    )
+
+
+@router.get("/billing/history", response_model=BillingHistoryResponse, tags=["Billing"])
+async def get_billing_history(
+    current_user: AdminUser,
+    db: DBSession,
+    hostel_id: Optional[str] = None,
+):
+    """
+    **[Hostel Admin] Get payment history for the billing page.**
+
+    Returns: payment_id, order_id, razorpay_payment_id, plan_name,
+    amount, currency, provider, status, paid_at, invoice_id, invoice_number.
+    """
+    return await BillingService(db).get_billing_history(
+        admin_user_id=current_user.id,
+        hostel_id=hostel_id,
+    )
+
+
+@router.get("/billing/invoice/{invoice_id}", tags=["Billing"])
+async def download_invoice(
+    invoice_id: str,
+    current_user: AdminUser,
+    db: DBSession,
+    format: str = "json",
+):
+    """
+    **[Hostel Admin] Download or view an invoice.**
+
+    Pass `?format=html` to get the rendered HTML invoice (for browser view/print).
+    Pass `?format=json` (default) to get the invoice data as JSON.
+    """
+    invoice = await BillingService(db).get_invoice(
+        invoice_id=invoice_id,
+        admin_user_id=current_user.id,
+    )
+    if format == "html" and invoice.invoice_html:
+        return HTMLResponse(content=invoice.invoice_html)
+    return invoice
+
