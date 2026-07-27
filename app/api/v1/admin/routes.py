@@ -1949,6 +1949,23 @@ async def download_invoice(
         admin_user_id=current_user.id,
     )
     if format == "html" and invoice.invoice_html:
+        from fastapi.responses import HTMLResponse
         return HTMLResponse(content=invoice.invoice_html)
+    elif format == "pdf" and invoice.invoice_html:
+        from io import BytesIO
+        from xhtml2pdf import pisa
+        from fastapi.responses import Response
+
+        pdf_file = BytesIO()
+        pisa_status = pisa.CreatePDF(invoice.invoice_html, dest=pdf_file)
+        
+        if pisa_status.err:
+            raise HTTPException(status_code=500, detail="Could not generate PDF")
+        
+        return Response(
+            content=pdf_file.getvalue(), 
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="invoice_{invoice.invoice_number}.pdf"'}
+        )
     return invoice
 
