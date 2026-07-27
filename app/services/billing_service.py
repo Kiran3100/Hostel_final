@@ -16,6 +16,7 @@ from typing import Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -504,6 +505,7 @@ class BillingService:
 
         result = await self.session.execute(
             select(BillingPayment)
+            .options(selectinload(BillingPayment.invoice))
             .where(BillingPayment.hostel_id == hostel.id)
             .order_by(BillingPayment.created_at.desc())
         )
