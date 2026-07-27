@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +24,7 @@ DBSession = Annotated[AsyncSession, Depends(get_db)]
 
 
 async def get_current_user(
+    request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)] = None,
     x_user_id: Annotated[str | None, Header()] = None,
     x_user_role: Annotated[str | None, Header()] = None,
@@ -36,9 +37,10 @@ async def get_current_user(
     2. x-user-* headers — used by seed scripts / internal tools / tests
     """
     # ── JWT Bearer path ───────────────────────────────────────────────
-    if credentials and credentials.credentials:
+    token = credentials.credentials if credentials else request.query_params.get("token")
+    if token:
         try:
-            payload = decode_token(credentials.credentials)
+            payload = decode_token(token)
         except Exception:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
