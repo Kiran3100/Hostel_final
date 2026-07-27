@@ -31,7 +31,7 @@ class PaymentConfigService:
             }
             
         return {
-            "hostel_id": config.hostel_id,
+            "hostel_id": str(config.hostel_id),
             "razorpay_key_id": config.razorpay_key_id,
             "is_active": config.is_active,
             "is_configured": True
@@ -77,8 +77,7 @@ class PaymentConfigService:
         await self.session.commit()
         
         return {
-            "message": "Payment configuration saved successfully.",
-            "hostel_id": config.hostel_id,
+            "hostel_id": str(config.hostel_id),
             "razorpay_key_id": config.razorpay_key_id,
             "is_active": config.is_active,
             "is_configured": True
