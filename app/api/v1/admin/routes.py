@@ -643,6 +643,29 @@ async def update_student(
     if payload.check_out_date is not None:
         student.check_out_date = payload.check_out_date
         updated_student_fields.append("check_out_date")
+        
+        # If check out date is set, also update booking and bed status if needed
+        # We assume that checking out means marking the booking as CHECKED_OUT and freeing the bed
+        from app.models.booking import Booking, BookingStatus
+        from app.models.room import Bed, BedStatus
+        
+        # Update booking status
+        if student.booking_id:
+            booking_result = await db.execute(
+                select(Booking).where(Booking.id == student.booking_id)
+            )
+            booking = booking_result.scalar_one_or_none()
+            if booking and booking.status != BookingStatus.CHECKED_OUT:
+                booking.status = BookingStatus.CHECKED_OUT
+        
+        # Free up the bed
+        if student.bed_id:
+            bed_result = await db.execute(
+                select(Bed).where(Bed.id == student.bed_id)
+            )
+            bed = bed_result.scalar_one_or_none()
+            if bed and bed.status != BedStatus.AVAILABLE:
+                bed.status = BedStatus.AVAILABLE
     
     # Commit changes
     await db.commit()
@@ -1195,38 +1218,6 @@ async def delete_complaint(
     
     return Response(status_code=204)
 
-@router.delete("/complaints/{complaint_id}", status_code=204)
-async def delete_complaint(
-    complaint_id: str,
-    db: DBSession,
-    current_user: AdminUser,
-):
-    
-    # Get the complaint
-    result = await db.execute(
-        select(Complaint).where(Complaint.id == complaint_id)
-    )
-    complaint = result.scalar_one_or_none()
-    
-    if not complaint:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Complaint not found."
-        )
-    
-    # Check if admin has access to this hostel
-    if str(complaint.hostel_id) not in current_user.hostel_ids:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You don't have access to this complaint."
-        )
-    
-    # Delete the complaint
-    await db.delete(complaint)
-    await db.commit()
-    
-    return Response(status_code=204)
-
 @router.delete("/students/{student_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_student(
     student_id: str,
@@ -1308,67 +1299,8 @@ async def get_student(
         "created_at": student.created_at,
         "updated_at": student.updated_at,
     }
-
-
-@router.patch("/students/{student_id}", response_model=StudentResponse)
-async def update_student(
-    student_id: str,
-    db: DBSession,
-    current_user: AdminUser,
-    check_out_date: str | None = None,
-    status: str | None = None,
-):
-    """Update student (check-out date, status, etc.)"""
-    from app.models.student import Student
-    from app.models.booking import Booking, BookingStatus
-    from app.models.room import Bed, BedStatus
-    from sqlalchemy import select
-    from datetime import date
-    
-    # Get student
-    result = await db.execute(
-        select(Student).where(Student.id == student_id)
-    )
-    student = result.scalar_one_or_none()
-    
-    if not student:
-        raise HTTPException(status_code=404, detail="Student not found.")
-    
-    # Check permission
-    if str(student.hostel_id) not in current_user.hostel_ids:
-        raise HTTPException(status_code=403, detail="Access denied.")
-    
-    # Update check_out_date
-    if check_out_date:
-        student.check_out_date = date.fromisoformat(check_out_date)
-        student.status = "CHECKED_OUT"
-        
-        # Update booking status
-        booking_result = await db.execute(
-            select(Booking).where(Booking.id == student.booking_id)
-        )
-        booking = booking_result.scalar_one_or_none()
-        if booking:
-            booking.status = BookingStatus.CHECKED_OUT
-        
-        # Free up the bed
-        bed_result = await db.execute(
-            select(Bed).where(Bed.id == student.bed_id)
-        )
-        bed = bed_result.scalar_one_or_none()
-        if bed:
-            bed.status = BedStatus.AVAILABLE
-    
-    # Update status
-    if status:
-        student.status = status
-    
-    await db.commit()
-    await db.refresh(student)
-    
-    return student
-
 # Add these mess menu item endpoints
+
 
 @router.get("/mess-menu/{item_id}")
 async def get_mess_menu_item(
@@ -1481,38 +1413,6 @@ async def update_mess_menu_item(
         "day_of_week": item.day_of_week,
         "updated_at": item.updated_at,
     }
-
-@router.delete("/mess-menu/{item_id}", status_code=204)
-async def delete_mess_menu_item(
-    item_id: str,
-    db: DBSession,
-    current_user: AdminUser,
-):
-    """Delete a mess menu item"""
-    from app.models.operations import MessMenuItem, MessMenu
-    from sqlalchemy import select
-    
-    result = await db.execute(
-        select(MessMenuItem, MessMenu)
-        .join(MessMenu, MessMenu.id == MessMenuItem.menu_id)
-        .where(MessMenuItem.id == item_id)
-    )
-    row = result.first()
-    
-    if not row:
-        raise HTTPException(status_code=404, detail="Mess menu item not found.")
-    
-    item, menu = row
-    
-    # Check permission
-    if str(menu.hostel_id) not in current_user.hostel_ids:
-        raise HTTPException(status_code=403, detail="Access denied.")
-    
-    await db.delete(item)
-    await db.commit()
-    
-    return Response(status_code=204)
-
 @router.get("/rooms/{room_id}/beds/count")
 async def get_room_bed_stats(room_id: str, db: DBSession, current_user: AdminUser):
     """Get bed statistics for a room."""
