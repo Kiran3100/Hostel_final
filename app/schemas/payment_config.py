@@ -14,6 +14,7 @@ class HostelPaymentConfigUpdate(HostelPaymentConfigBase):
 
 class HostelPaymentConfigResponse(HostelPaymentConfigBase):
     hostel_id: str
+    razorpay_key_id: str | None = Field(None, description="Razorpay Key ID")
     is_configured: bool = Field(default=True, description="True if a configuration exists")
     
     model_config = ConfigDict(from_attributes=True)

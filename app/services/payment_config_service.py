@@ -24,8 +24,10 @@ class PaymentConfigService:
         
         if not config:
             return {
+                "hostel_id": hostel_id,
                 "is_configured": False,
-                "is_active": False
+                "is_active": False,
+                "razorpay_key_id": None
             }
             
         return {
