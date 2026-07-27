@@ -1105,7 +1105,10 @@ async def list_all_payments(
     for p in payments:
         # Get visitor/user info from booking
         visitor_info = None
+        payer_name = None
+
         if p.booking_id:
+            from app.models.student import Student
             booking_result = await db.execute(
                 select(Booking, User)
                 .join(User, User.id == Booking.visitor_id)
@@ -1114,9 +1117,10 @@ async def list_all_payments(
             row = booking_result.first()
             if row:
                 booking, user = row
+                payer_name = booking.full_name or user.full_name
                 visitor_info = {
                     "visitor_id": str(user.id),
-                    "visitor_name": booking.full_name or user.full_name,
+                    "visitor_name": payer_name,
                     "visitor_email": user.email,
                     "visitor_phone": user.phone,
                     "booking_check_in": str(booking.check_in_date),
@@ -1124,11 +1128,22 @@ async def list_all_payments(
                     "booking_type": booking.booking_type if hasattr(booking, "booking_type") else None,
                 }
 
+        # Fallback: look up payer_name from student → user
+        if not payer_name and p.student_id:
+            from app.models.student import Student
+            student_result = await db.execute(
+                select(User).join(Student, Student.user_id == User.id).where(Student.id == p.student_id)
+            )
+            student_user = student_result.scalar_one_or_none()
+            if student_user:
+                payer_name = student_user.full_name
+
         items.append({
             "payment_id": str(p.id),
             "hostel_id": str(p.hostel_id),
             "booking_id": str(p.booking_id) if p.booking_id else None,
             "student_id": str(p.student_id) if p.student_id else None,
+            "payer_name": payer_name,
             "amount": float(p.amount),
             "payment_type": p.payment_type,
             "payment_method": p.payment_method,
