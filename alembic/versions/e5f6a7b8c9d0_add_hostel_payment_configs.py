@@ -1,7 +1,7 @@
 """add hostel payment configs
 
 Revision ID: e5f6a7b8c9d0
-Revises: d4e5f6a7b8c9
+Revises: aa24b30974b0
 Create Date: 2026-07-24 10:00:00.000000
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'e5f6a7b8c9d0'
-down_revision: Union[str, None] = 'd4e5f6a7b8c9'
+down_revision: Union[str, None] = 'aa24b30974b0'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
