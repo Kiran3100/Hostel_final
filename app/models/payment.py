@@ -62,6 +62,17 @@ class Payment(BaseModel):
             pass
         return None
 
+    @property
+    def payer_name(self) -> str | None:
+        try:
+            if self.student and self.student.user:
+                return self.student.user.full_name
+            if self.booking and self.booking.visitor:
+                return self.booking.visitor.full_name
+        except Exception:
+            pass
+        return None
+
 
 class PaymentWebhookEvent(BaseModel):
     __tablename__ = "payment_webhook_events"

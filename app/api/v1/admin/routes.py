@@ -755,13 +755,24 @@ async def list_payments(hostel_id: str, db: DBSession, current_user: AdminUser):
 async def list_my_hostel_payments(db: DBSession, current_user: AdminUser):
     """**List all payments across all hostels managed by the logged-in admin.**"""
     from app.models.payment import Payment
+    from sqlalchemy.orm import joinedload
+    from app.models.student import Student
+    from app.models.booking import Booking
+
     hostel_ids = list(current_user.hostel_ids)
     if not hostel_ids:
         return []
     result = await db.execute(
-        select(Payment).where(Payment.hostel_id.in_(hostel_ids)).order_by(Payment.created_at.desc())
+        select(Payment)
+        .options(
+            joinedload(Payment.student).joinedload(Student.user),
+            joinedload(Payment.booking).joinedload(Booking.visitor),
+            joinedload(Payment.booking).joinedload(Booking.payments)
+        )
+        .where(Payment.hostel_id.in_(hostel_ids))
+        .order_by(Payment.created_at.desc())
     )
-    return result.scalars().all()
+    return result.scalars().unique().all()
 
 
 @router.get("/hostels/{hostel_id}/complaints", response_model=list[ComplaintResponse])

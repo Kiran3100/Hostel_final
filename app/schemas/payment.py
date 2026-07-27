@@ -41,6 +41,7 @@ class PaymentResponse(APIModel):
     hostel_id: str
     student_id: str | None = None
     booking_id: str | None = None
+    payer_name: str | None = None
     amount: float
     payment_type: str
     payment_method: str

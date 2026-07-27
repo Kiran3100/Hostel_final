@@ -55,9 +55,15 @@ class PaymentRepository:
         return list(result.scalars().unique().all())
 
     async def list_by_hostel(self, hostel_id: str) -> list[Payment]:
+        from app.models.student import Student
+        from app.models.booking import Booking
         result = await self.session.execute(
             select(Payment)
-            .options(joinedload(Payment.booking).joinedload(Booking.payments))
+            .options(
+                joinedload(Payment.student).joinedload(Student.user),
+                joinedload(Payment.booking).joinedload(Booking.visitor),
+                joinedload(Payment.booking).joinedload(Booking.payments)
+            )
             .where(Payment.hostel_id == hostel_id)
             .order_by(Payment.created_at.desc())
         )
