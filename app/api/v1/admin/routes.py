@@ -1883,11 +1883,11 @@ async def change_admin_password(
     }
 
 @router.get("/payment-config", response_model=HostelPaymentConfigResponse, tags=["Payment Settings"])
-async def get_payment_config(current_user: CurrentUser, db: DBSession):
+async def get_payment_config(current_user: AdminUser, db: DBSession):
     admin_hostel = await AdminService(db)._get_admin_primary_hostel(current_user.id)
     return await PaymentConfigService(db).get_payment_config(admin_hostel.id)
 
 @router.put("/payment-config", response_model=HostelPaymentConfigResponse, tags=["Payment Settings"])
-async def update_payment_config(payload: HostelPaymentConfigUpdate, current_user: CurrentUser, db: DBSession):
+async def update_payment_config(payload: HostelPaymentConfigUpdate, current_user: AdminUser, db: DBSession):
     admin_hostel = await AdminService(db)._get_admin_primary_hostel(current_user.id)
     return await PaymentConfigService(db).upsert_payment_config(admin_hostel.id, payload)
