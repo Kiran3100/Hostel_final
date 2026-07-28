@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint, func, Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
@@ -199,8 +199,15 @@ class HostelPaymentConfig(BaseModel):
     __tablename__ = "hostel_payment_configs"
 
     hostel_id: Mapped[str] = mapped_column(ForeignKey("hostels.id", ondelete="CASCADE"), unique=True, index=True)
-    razorpay_key_id: Mapped[str] = mapped_column(String(120))
-    razorpay_key_secret_encrypted: Mapped[str] = mapped_column(Text)
+    
+    # Direct Integration Keys (Option 1)
+    razorpay_key_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    razorpay_key_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    
+    # Razorpay Route Linked Account (Option 3)
+    razorpay_linked_account_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    platform_fee_percentage: Mapped[float] = mapped_column(Float, default=0.0)
+    
     razorpay_webhook_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 

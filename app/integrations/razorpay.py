@@ -43,11 +43,20 @@ class RazorpayClient:
                 self._configured = False
         return self._client
 
-    def create_order(self, *, amount: float, receipt: str, notes: dict | None = None) -> dict:
+    def create_order(
+        self,
+        *,
+        amount: float,
+        receipt: str,
+        notes: dict | None = None,
+        transfers: list[dict] | None = None,
+    ) -> dict:
         """
         Create a Razorpay order.
-        - amount: amount in INR (will be converted to paise internally)
+        - amount: total amount in INR (converted to paise internally)
         - receipt: unique receipt identifier (booking number)
+        - transfers: optional list of Route transfer objects for split payments.
+          Each object: {"account": "acc_xxx", "amount": <paise>, "currency": "INR"}
         - Returns full order dict including key_id for frontend checkout
         Falls back to a mock order if credentials are not configured.
         """
@@ -69,13 +78,20 @@ class RazorpayClient:
             }
 
         amount_paise = int(round(amount * 100))
+        order_data: dict = {
+            "amount": amount_paise,
+            "currency": "INR",
+            "receipt": receipt,
+            "notes": notes or {},
+        }
+
+        # ── Razorpay Route: attach transfer instructions ───────────────────────
+        if transfers:
+            order_data["transfers"] = transfers
+            logger.info(f"[Razorpay Route] Creating split order — {len(transfers)} transfer(s) attached")
+
         try:
-            order = self._get_client().order.create(data={
-                "amount": amount_paise,
-                "currency": "INR",
-                "receipt": receipt,
-                "notes": notes or {},
-            })
+            order = self._get_client().order.create(data=order_data)
             order["key_id"] = self.key_id  # Pass to frontend for checkout init
             logger.info(f"[Razorpay] Order created: {order['id']} for ₹{amount}")
             return order
