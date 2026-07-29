@@ -657,10 +657,10 @@ async def chat_with_assistant(payload: ChatMessageRequest):
         try:
             response = await client.post(url, json=payload_data, headers=headers)
             if response.status_code == 429:
-                return {"reply": "I'm receiving too many requests right now. Please wait a moment and try again."}
+                return {"reply": f"RATE_LIMIT_429: {response.text[:300]}"}
             if response.status_code != 200:
                 logger.error(f"Gemini API returned error {response.status_code}: {response.text}")
-                return {"reply": "Hello! I'm having trouble connecting to my AI core. Please try again in a moment."}
+                return {"reply": f"ERROR_{response.status_code}: {response.text[:300]}"}
             
             resp_json = response.json()
             try:
@@ -668,8 +668,8 @@ async def chat_with_assistant(payload: ChatMessageRequest):
                 return {"reply": reply.strip()}
             except (KeyError, IndexError) as parse_err:
                 logger.error(f"Failed to parse Gemini API response: {parse_err}. Response was: {resp_json}")
-                return {"reply": "I received an empty response. Could you rephrase your question?"}
+                return {"reply": f"PARSE_ERROR: {str(parse_err)} - {str(resp_json)[:200]}"}
         except Exception as e:
             logger.error(f"Error occurred while connecting to Gemini API: {e}")
-            return {"reply": "Sorry, I am offline right now due to a network connection error. Please try again later."}
+            return {"reply": f"EXCEPTION: {str(e)}"}
 
