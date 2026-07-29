@@ -53,7 +53,7 @@ class PaymentWriteService:
             )
             await self.session.flush()
 
-        # Fetch Hostel Payment Config
+        # Fetch Hostel Razorpay Keys
         from app.services.payment_config_service import PaymentConfigService
         hostel_keys = await PaymentConfigService(self.session).get_decrypted_keys(str(booking.hostel_id))
         if not hostel_keys:
@@ -61,37 +61,11 @@ class PaymentWriteService:
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
                 detail="This hostel has not configured online payments yet. Please contact the hostel admin."
             )
-
-        # ── Build Razorpay client + optional transfers ──────────────────────
-        transfers = None
-        if hostel_keys["mode"] == "route":
-            # Use Super Admin master keys — let Razorpay split the payment
-            razorpay_client = RazorpayClient()  # reads from .env
-            fee_pct = hostel_keys["platform_fee_percentage"]
-            amount_paise = int(round(payload.booking_advance * 100))
-            platform_fee_paise = int(round(amount_paise * fee_pct / 100))
-            hostel_amount_paise = amount_paise - platform_fee_paise
-            if hostel_amount_paise > 0:
-                transfers = [{
-                    "account": hostel_keys["linked_account_id"],
-                    "amount": hostel_amount_paise,
-                    "currency": "INR",
-                    "notes": {
-                        "booking_id": str(booking.id),
-                        "description": f"Rent payment — {fee_pct}% platform fee retained"
-                    }
-                }]
-            logger.info(
-                f"[Route] booking_advance=₹{payload.booking_advance} | "
-                f"platform_fee={fee_pct}% (₹{platform_fee_paise/100:.2f}) | "
-                f"hostel_transfer=₹{hostel_amount_paise/100:.2f}"
-            )
-        else:
-            # Use hostel's own Razorpay keys
-            razorpay_client = RazorpayClient(
-                key_id=hostel_keys["key_id"],
-                key_secret=hostel_keys["key_secret"]
-            )
+            
+        razorpay_client = RazorpayClient(
+            key_id=hostel_keys["key_id"],
+            key_secret=hostel_keys["key_secret"]
+        )
 
         # Create Razorpay order
         try:
@@ -99,7 +73,6 @@ class PaymentWriteService:
                 amount=payload.booking_advance,
                 receipt=str(booking.booking_number),
                 notes={"booking_id": str(booking.id), "visitor_id": actor_id},
-                transfers=transfers,
             )
         except Exception as e:
             raise HTTPException(
@@ -404,7 +377,7 @@ class PaymentWriteService:
                 detail=f"No remaining balance to pay. Booking is fully paid (₹{grand_total:.2f}).",
             )
 
-        # 4. Fetch Hostel Payment Config
+        # 4. Fetch Hostel Razorpay Keys
         from app.services.payment_config_service import PaymentConfigService
         hostel_keys = await PaymentConfigService(self.session).get_decrypted_keys(str(booking.hostel_id))
         if not hostel_keys:
@@ -412,35 +385,11 @@ class PaymentWriteService:
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
                 detail="This hostel has not configured online payments yet. Please contact the hostel admin."
             )
-
-        # ── Build Razorpay client + optional transfers ──────────────────────
-        transfers = None
-        if hostel_keys["mode"] == "route":
-            razorpay_client = RazorpayClient()  # uses Super Admin master keys from .env
-            fee_pct = hostel_keys["platform_fee_percentage"]
-            remaining_paise = int(round(remaining * 100))
-            platform_fee_paise = int(round(remaining_paise * fee_pct / 100))
-            hostel_amount_paise = remaining_paise - platform_fee_paise
-            if hostel_amount_paise > 0:
-                transfers = [{
-                    "account": hostel_keys["linked_account_id"],
-                    "amount": hostel_amount_paise,
-                    "currency": "INR",
-                    "notes": {
-                        "booking_id": str(booking.id),
-                        "description": f"Remaining balance — {fee_pct}% platform fee retained"
-                    }
-                }]
-            logger.info(
-                f"[Route] remaining=₹{remaining} | "
-                f"platform_fee={fee_pct}% (₹{platform_fee_paise/100:.2f}) | "
-                f"hostel_transfer=₹{hostel_amount_paise/100:.2f}"
-            )
-        else:
-            razorpay_client = RazorpayClient(
-                key_id=hostel_keys["key_id"],
-                key_secret=hostel_keys["key_secret"]
-            )
+            
+        razorpay_client = RazorpayClient(
+            key_id=hostel_keys["key_id"],
+            key_secret=hostel_keys["key_secret"]
+        )
 
         # 5. Create Razorpay order
         try:
@@ -452,7 +401,6 @@ class PaymentWriteService:
                     "visitor_id": actor_id,
                     "payment_type": "remaining_balance",
                 },
-                transfers=transfers,
             )
         except Exception as e:
             raise HTTPException(
