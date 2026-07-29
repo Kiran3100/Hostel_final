@@ -84,11 +84,3 @@ Regardless of the gateway chosen, the Hostel Admin must provide these basic docu
 
 ---
 
-## 💡 Final Suggestion for the Team
-
-If the frontend team wants to change because Razorpay is "complicated", they should look at **Cashfree Hosted Checkout** or **PhonePe PG**. 
-
-These two offer:
-1. **No payment modals to build** (hosted page redirect flow).
-2. **Simplified onboarding** for Indian hostel owners.
-3. **Cheaper transaction rates** for UPI payments.
