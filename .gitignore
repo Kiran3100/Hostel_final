@@ -254,6 +254,12 @@ static/media/
 *.webp
 *.mp4
 *.pdf
+# Allow logo/image assets inside docs/ folder
+!docs/*.png
+!docs/*.jpg
+!docs/*.jpeg
+!docs/*.gif
+!docs/*.webp
 *.doc
 *.docx
 
