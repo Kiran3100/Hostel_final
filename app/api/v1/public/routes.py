@@ -570,3 +570,104 @@ async def direct_upload(
         content_type=ct,
     )
     return {"url": url, "filename": file.filename, "content_type": ct, "status": "success"}
+
+
+# ==================== NESTORA CHAT ASSISTANT AI ====================
+
+from pydantic import BaseModel, Field
+
+class ChatMessageRequest(BaseModel):
+    message: str = Field(..., min_length=1, description="The message sent by the user to the assistant")
+
+class ChatMessageResponse(BaseModel):
+    reply: str = Field(..., description="The AI assistant's generated response")
+
+
+@router.post(
+    "/chat/message",
+    response_model=ChatMessageResponse,
+    summary="Ask a question to Nestora Assistant AI",
+    tags=["public"],
+)
+async def chat_with_assistant(payload: ChatMessageRequest):
+    """
+    **Ask Nestora Assistant AI a question.**
+    
+    This endpoint sends the prompt directly to Google's Gemini 1.5 Flash model
+    using a customized system prompt tailored to the Levitica Nestora Hostel Management platform.
+    """
+    import httpx
+    import logging
+    from app.config import get_settings
+
+    logger = logging.getLogger(__name__)
+    settings = get_settings()
+    gemini_key = settings.gemini_api_key
+
+    if not gemini_key:
+        logger.warning("GEMINI_API_KEY environment variable is not configured. Falling back to default assistant.")
+        return {
+            "reply": (
+                "Hello! I am Nestora Assistant. It looks like my AI key is not configured in this environment yet. "
+                "Please make sure to set GEMINI_API_KEY to start chatting with me dynamically!"
+            )
+        }
+
+    system_instruction = (
+        "You are Nestora Assistant, a friendly and smart AI assistant for Levitica Nestora — a premium, "
+        "multi-tenant hostel management & booking platform in India. "
+        "Your tone should be helpful, clear, and professional. Guide users on how to use the app.\n\n"
+        "Here are key facts about our platform:\n"
+        "1. Hostels & Bookings: Visitors browse hostels, choose rooms (single share, double share, etc.), and complete bookings online. "
+        "Once a booking is approved by the admin, a bed is assigned.\n"
+        "2. Payments: Direct integration only (no Route/split payments). Students pay advance and remaining rent through "
+        "Student Dashboard -> Payments. Hostel Admins configure keys via Admin Dashboard -> Payment Settings.\n"
+        "3. Complaints: Students file complaints under Student Dashboard -> Complaints (e.g. food quality, clean bedsheets). "
+        "Supervisors assign maintenance team, track SLA, and update status.\n"
+        "4. Attendance: Marks student check-in/out. Managed by supervisors.\n"
+        "5. Mess Food Menu: Shows daily breakfast, lunch, and dinner list.\n"
+        "6. Navigation: Help the user by pointing them to the correct dashboard tab for their user role (Student, Admin, or Supervisor).\n\n"
+        "Keep your response concise (usually under 3-4 sentences) and highly relevant."
+    )
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}"
+    
+    payload_data = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": payload.message
+                    }
+                ]
+            }
+        ],
+        "systemInstruction": {
+            "parts": [
+                {
+                    "text": system_instruction
+                }
+            ]
+        }
+    }
+
+    headers = {"Content-Type": "application/json"}
+    
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            response = await client.post(url, json=payload_data, headers=headers)
+            if response.status_code != 200:
+                logger.error(f"Gemini API returned error {response.status_code}: {response.text}")
+                return {"reply": "Hello! I'm having trouble connecting to my AI core. Please try again in a moment."}
+            
+            resp_json = response.json()
+            try:
+                reply = resp_json["candidates"][0]["content"]["parts"][0]["text"]
+                return {"reply": reply.strip()}
+            except (KeyError, IndexError) as parse_err:
+                logger.error(f"Failed to parse Gemini API response: {parse_err}. Response was: {resp_json}")
+                return {"reply": "I received an empty response. Could you rephrase your question?"}
+        except Exception as e:
+            logger.error(f"Error occurred while connecting to Gemini API: {e}")
+            return {"reply": "Sorry, I am offline right now due to a network connection error. Please try again later."}
+

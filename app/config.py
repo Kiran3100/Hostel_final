@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     encryption_key: str = Field(default="", description="Fernet encryption key for securing stored secrets")
 
+    # Google Gemini AI Key for Nestora Assistant
+    gemini_api_key: str = Field(default="", description="Google Gemini API Key for Chat Assistant")
+
 
     # 2Factor SMS OTP
     two_factor_api_key: str = Field(default="", description="2Factor.in Message API Key for SMS OTP")
