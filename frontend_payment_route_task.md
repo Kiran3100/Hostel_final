@@ -152,8 +152,8 @@ const handleSubmit = async () => {
     body.platform_fee_percentage = parseFloat(form.platform_fee_percentage);
   }
 
-  // API call — same endpoint as before, just different body
-  await api.patch(`/admin/hostels/${hostelId}/payment-config`, body);
+  // API call — changed endpoint and method
+  await api.put(`/api/v1/admin/payment-config?hostel_id=${hostelId}`, body);
 };
 ```
 
@@ -201,7 +201,7 @@ const handleSubmit = async () => {
 // EXISTING useEffect — add mode detection
 useEffect(() => {
   const fetchConfig = async () => {
-    const data = await api.get(`/admin/hostels/${hostelId}/payment-config`);
+    const data = await api.get(`/api/v1/admin/payment-config?hostel_id=${hostelId}`);
     setConfig(data);
 
     // NEW — detect and pre-select the mode

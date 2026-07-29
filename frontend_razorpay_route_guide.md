@@ -105,7 +105,7 @@ This is the most important UI change. Currently the settings page only shows fie
 #### API Call to Save Route Config
 
 ```http
-PATCH /api/v1/admin/hostels/{hostel_id}/payment-config
+PUT /api/v1/admin/payment-config?hostel_id={hostel_id}
 Authorization: Bearer {token}
 Content-Type: application/json
 
@@ -119,7 +119,7 @@ Content-Type: application/json
 #### API Call to Save Direct Config (existing, unchanged)
 
 ```http
-PATCH /api/v1/admin/hostels/{hostel_id}/payment-config
+PUT /api/v1/admin/payment-config?hostel_id={hostel_id}
 Authorization: Bearer {token}
 Content-Type: application/json
 
@@ -134,7 +134,7 @@ Content-Type: application/json
 
 ### 2. Display Payment Mode Badge
 
-The `GET /api/v1/admin/hostels/{hostel_id}/payment-config` response now includes new fields. Use them to display the current configuration clearly.
+The `GET /api/v1/admin/payment-config?hostel_id={hostel_id}` response now includes new fields. Use them to display the current configuration clearly.
 
 #### Updated API Response Schema
 
