@@ -592,9 +592,9 @@ class ChatMessageResponse(BaseModel):
 async def chat_with_assistant(payload: ChatMessageRequest):
     """
     **Ask Nestora Assistant AI a question.**
-    
-    This endpoint sends the prompt directly to Google's Gemini 1.5 Flash model
-    using a customized system prompt tailored to the Levitica Nestora Hostel Management platform.
+
+    Powered by Groq's ultra-fast LPU inference using Llama 3.1.
+    Free tier: 30 requests/minute, 14,400 requests/day.
     """
     import httpx
     import logging
@@ -602,74 +602,69 @@ async def chat_with_assistant(payload: ChatMessageRequest):
 
     logger = logging.getLogger(__name__)
     settings = get_settings()
-    gemini_key = settings.gemini_api_key
+    groq_key = settings.gemini_api_key  # reusing same env var slot — just set GEMINI_API_KEY to your Groq key
 
-    if not gemini_key:
-        logger.warning("GEMINI_API_KEY environment variable is not configured. Falling back to default assistant.")
+    if not groq_key:
         return {
             "reply": (
-                "Hello! I am Nestora Assistant. It looks like my AI key is not configured in this environment yet. "
-                "Please make sure to set GEMINI_API_KEY to start chatting with me dynamically!"
+                "Hello! I am Nestora Assistant. "
+                "My AI key is not configured yet. "
+                "Please ask your admin to set the GEMINI_API_KEY environment variable."
             )
         }
 
-    system_instruction = (
-        "You are Nestora Assistant, a friendly and smart AI assistant for Levitica Nestora — a premium, "
-        "multi-tenant hostel management & booking platform in India. "
+    system_prompt = (
+        "You are Nestora Assistant, a friendly and smart AI assistant for Levitica Nestora — "
+        "a premium multi-tenant hostel management and booking platform in India. "
         "Your tone should be helpful, clear, and professional. Guide users on how to use the app.\n\n"
-        "Here are key facts about our platform:\n"
-        "1. Hostels & Bookings: Visitors browse hostels, choose rooms (single share, double share, etc.), and complete bookings online. "
+        "Key facts about this platform:\n"
+        "1. Hostels & Bookings: Visitors browse hostels, choose rooms, and complete bookings online. "
         "Once a booking is approved by the admin, a bed is assigned.\n"
-        "2. Payments: Direct integration only (no Route/split payments). Students pay advance and remaining rent through "
-        "Student Dashboard -> Payments. Hostel Admins configure keys via Admin Dashboard -> Payment Settings.\n"
-        "3. Complaints: Students file complaints under Student Dashboard -> Complaints (e.g. food quality, clean bedsheets). "
-        "Supervisors assign maintenance team, track SLA, and update status.\n"
+        "2. Payments: Students pay rent through Student Dashboard -> Payments using Razorpay.\n"
+        "3. Complaints: Students file complaints under Student Dashboard -> Complaints. "
+        "Supervisors assign the maintenance team and track SLA.\n"
         "4. Attendance: Marks student check-in/out. Managed by supervisors.\n"
-        "5. Mess Food Menu: Shows daily breakfast, lunch, and dinner list.\n"
-        "6. Navigation: Help the user by pointing them to the correct dashboard tab for their user role (Student, Admin, or Supervisor).\n\n"
-        "Keep your response concise (usually under 3-4 sentences) and highly relevant."
+        "5. Mess Food Menu: Shows daily breakfast, lunch, and dinner.\n"
+        "6. Navigation: Point users to the correct dashboard tab for their role "
+        "(Student, Hostel Admin, or Supervisor).\n\n"
+        "Keep responses concise — 2 to 4 sentences max. Be warm and helpful."
     )
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}"
-    
-    payload_data = {
-        "contents": [
-            {
-                "parts": [
-                    {
-                        "text": payload.message
-                    }
-                ]
-            }
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {groq_key}",
+    }
+    body = {
+        "model": "llama-3.1-8b-instant",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": payload.message},
         ],
-        "systemInstruction": {
-            "parts": [
-                {
-                    "text": system_instruction
-                }
-            ]
-        }
+        "temperature": 0.7,
+        "max_tokens": 256,
     }
 
-    headers = {"Content-Type": "application/json"}
-    
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with httpx.AsyncClient(timeout=20.0) as client:
         try:
-            response = await client.post(url, json=payload_data, headers=headers)
+            response = await client.post(url, json=body, headers=headers)
             if response.status_code == 429:
-                return {"reply": f"RATE_LIMIT_429: {response.text[:300]}"}
+                return {"reply": "I am receiving too many requests right now. Please wait a moment and try again."}
+            if response.status_code == 401:
+                return {"reply": "My AI key is invalid. Please ask the admin to update the GEMINI_API_KEY in Render settings."}
             if response.status_code != 200:
-                logger.error(f"Gemini API returned error {response.status_code}: {response.text}")
-                return {"reply": f"ERROR_{response.status_code}: {response.text[:300]}"}
-            
+                logger.error(f"Groq API error {response.status_code}: {response.text}")
+                return {"reply": "I am having trouble connecting right now. Please try again in a moment."}
+
             resp_json = response.json()
             try:
-                reply = resp_json["candidates"][0]["content"]["parts"][0]["text"]
+                reply = resp_json["choices"][0]["message"]["content"]
                 return {"reply": reply.strip()}
             except (KeyError, IndexError) as parse_err:
-                logger.error(f"Failed to parse Gemini API response: {parse_err}. Response was: {resp_json}")
-                return {"reply": f"PARSE_ERROR: {str(parse_err)} - {str(resp_json)[:200]}"}
+                logger.error(f"Failed to parse Groq response: {parse_err}. Response: {resp_json}")
+                return {"reply": "I received an empty response. Could you rephrase your question?"}
         except Exception as e:
-            logger.error(f"Error occurred while connecting to Gemini API: {e}")
-            return {"reply": f"EXCEPTION: {str(e)}"}
+            logger.error(f"Groq API connection error: {e}")
+            return {"reply": "Sorry, I am offline right now. Please try again later."}
+
 
