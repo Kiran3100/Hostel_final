@@ -630,7 +630,7 @@ async def chat_with_assistant(payload: ChatMessageRequest):
         "Keep your response concise (usually under 3-4 sentences) and highly relevant."
     )
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={gemini_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}"
     
     payload_data = {
         "contents": [
@@ -656,9 +656,11 @@ async def chat_with_assistant(payload: ChatMessageRequest):
     async with httpx.AsyncClient(timeout=15.0) as client:
         try:
             response = await client.post(url, json=payload_data, headers=headers)
+            if response.status_code == 429:
+                return {"reply": "I'm receiving too many requests right now. Please wait a moment and try again."}
             if response.status_code != 200:
                 logger.error(f"Gemini API returned error {response.status_code}: {response.text}")
-                return {"reply": f"Gemini API Error: {response.status_code} - {response.text}"}
+                return {"reply": "Hello! I'm having trouble connecting to my AI core. Please try again in a moment."}
             
             resp_json = response.json()
             try:
@@ -666,8 +668,8 @@ async def chat_with_assistant(payload: ChatMessageRequest):
                 return {"reply": reply.strip()}
             except (KeyError, IndexError) as parse_err:
                 logger.error(f"Failed to parse Gemini API response: {parse_err}. Response was: {resp_json}")
-                return {"reply": f"Parse Error: {str(parse_err)} - Response was: {resp_json}"}
+                return {"reply": "I received an empty response. Could you rephrase your question?"}
         except Exception as e:
             logger.error(f"Error occurred while connecting to Gemini API: {e}")
-            return {"reply": f"Network/Connection Exception: {str(e)}"}
+            return {"reply": "Sorry, I am offline right now due to a network connection error. Please try again later."}
 
