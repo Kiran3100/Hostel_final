@@ -630,7 +630,7 @@ async def chat_with_assistant(payload: ChatMessageRequest):
         "Keep your response concise (usually under 3-4 sentences) and highly relevant."
     )
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={gemini_key}"
     
     payload_data = {
         "contents": [
