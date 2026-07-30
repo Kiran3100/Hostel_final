@@ -485,20 +485,25 @@ class AdminService:
             # Accept multiple formats including Indian format (DD-MM-YYYY) and ISO (YYYY-MM-DD)
             def parse_flexible_datetime(val: str) -> datetime:
                 val = val.strip()
+                # Strip trailing Z and milliseconds for easier parsing
+                val_clean = val.replace("Z", "").replace("z", "")
+                # Remove milliseconds if present: 2026-07-31T09:27:00.000 -> 2026-07-31T09:27:00
+                if "." in val_clean and "T" in val_clean:
+                    val_clean = val_clean.split(".")[0]
                 for fmt in (
                     "%Y-%m-%dT%H:%M:%S",   # 2024-05-15T10:00:00
                     "%Y-%m-%dT%H:%M",       # 2024-05-15T10:00
                     "%Y-%m-%d %H:%M:%S",    # 2024-05-15 10:00:00
                     "%Y-%m-%d %H:%M",       # 2024-05-15 10:00
                     "%Y-%m-%d",             # 2024-05-15
-                    "%d-%m-%Y %H:%M:%S",   # 30-07-2026 12:45:00 (Indian)
+                    "%d-%m-%Y %H:%M:%S",    # 30-07-2026 12:45:00 (Indian)
                     "%d-%m-%Y %H:%M",       # 30-07-2026 12:45 (Indian)
                     "%d-%m-%Y",             # 30-07-2026 (Indian)
                     "%d/%m/%Y %H:%M",       # 30/07/2026 12:45
                     "%d/%m/%Y",             # 30/07/2026
                 ):
                     try:
-                        return datetime.strptime(val.replace("Z", ""), fmt)
+                        return datetime.strptime(val_clean, fmt)
                     except ValueError:
                         continue
                 raise ValueError(f"Cannot parse date: {val}")
