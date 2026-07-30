@@ -591,27 +591,66 @@ class AdminService:
             except ValueError:
                 raise HTTPException(status_code=400, detail="Invalid date_of_birth format. Use YYYY-MM-DD.")
 
+        # ── Fetch room for server-side pricing ───────────────────────
+        from app.models.room import Room
+        room_res = await self.session.execute(select(Room).where(Room.id == payload.room_id))
+        room = room_res.scalar_one_or_none()
+        if not room:
+            raise HTTPException(status_code=404, detail="Room not found.")
+
+        mode = BookingMode(payload.booking_mode)
+        total_hours: int | None = None
+        total_nights: int | None = None
+        total_months: int | None = None
+
+        if mode == BookingMode.HOURLY:
+            diff = check_out - check_in
+            total_hours = max(1, int(diff.total_seconds() / 3600))
+            if float(room.hourly_rent or 0) <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="This room does not have an hourly rate configured. Please set the hourly rent in Room settings first.",
+                )
+            base_rent = float(room.hourly_rent) * total_hours
+        elif mode == BookingMode.DAILY:
+            total_nights = max(1, (check_out - check_in).days)
+            base_rent = float(room.daily_rent or 0) * total_nights
+        else:  # MONTHLY
+            s, e = check_in, check_out
+            total_months = (e.year - s.year) * 12 + (e.month - s.month)
+            if e.day < s.day:
+                total_months -= 1
+            total_months = max(1, total_months)
+            base_rent = float(room.monthly_rent or 0) * total_months
+
+        security_deposit = float(room.security_deposit or 0)
+        grand_total = base_rent + security_deposit
+
         booking = Booking(
             visitor_id=str(user.id),
             hostel_id=hostel_id,
             room_id=payload.room_id,
             bed_id=payload.bed_id,
             booking_number=booking_number,
-            booking_mode=BookingMode(payload.booking_mode),
+            booking_mode=mode,
             check_in_date=check_in,
             check_out_date=check_out,
-            base_rent_amount=0,
-            security_deposit=0,
+            total_hours=total_hours,
+            total_nights=total_nights,
+            total_months=total_months,
+            base_rent_amount=base_rent,
+            security_deposit=security_deposit,
             booking_advance=0,
-            grand_total=0,
+            grand_total=grand_total,
             status=BookingStatus.CHECKED_IN,
             full_name=payload.full_name,
             approved_by=actor_id,
-            gender=gender_value,  # ← ADD THIS
-            date_of_birth=date_of_birth,  # ← ADD THIS
+            gender=gender_value,
+            date_of_birth=date_of_birth,
         )
         self.session.add(booking)
         await self.session.flush()
+
 
         bed_stay = BedStay(
             hostel_id=hostel_id,
