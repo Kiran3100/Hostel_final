@@ -597,6 +597,41 @@ async def create_leave_request(payload: LeaveRequestCreate, current_user: Studen
     }
 
 
+@router.post("/transfers", response_model=StudentTransferResponse, status_code=201)
+async def request_hostel_transfer(
+    payload: StudentTransferCreateRequest,
+    current_user: StudentUser,
+    db: DBSession,
+):
+    """**Request hostel transfer** — Initiate an internal or external hostel transfer."""
+    from app.schemas.transfer import StudentTransferCreateRequest, StudentTransferResponse
+    from app.services.transfer_service import TransferService
+    return await TransferService(db).request_transfer(user_id=current_user.id, payload=payload)
+
+
+@router.get("/transfers", response_model=list[StudentTransferResponse])
+async def list_my_transfers(
+    current_user: StudentUser,
+    db: DBSession,
+):
+    """**Student's transfer requests** — List all transfer requests for current student."""
+    from app.schemas.transfer import StudentTransferResponse
+    from app.services.transfer_service import TransferService
+    return await TransferService(db).list_student_transfers(user_id=current_user.id)
+
+
+@router.post("/transfers/{transfer_id}/cancel", response_model=StudentTransferResponse)
+async def cancel_transfer_request(
+    transfer_id: str,
+    current_user: StudentUser,
+    db: DBSession,
+):
+    """**Cancel transfer request** — Cancel a pending transfer request."""
+    from app.schemas.transfer import StudentTransferResponse
+    from app.services.transfer_service import TransferService
+    return await TransferService(db).cancel_transfer(user_id=current_user.id, transfer_id=transfer_id)
+
+
 # ==================== ADMIN HELPER ====================
 
 @router.get("/students/{student_id}", response_model=StudentResponse)

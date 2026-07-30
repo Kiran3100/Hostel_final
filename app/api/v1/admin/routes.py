@@ -906,6 +906,32 @@ async def add_student_direct(hostel_id: str, payload: DirectStudentAddRequest, d
     return await AdminService(db).add_student_direct(hostel_id, current_user.id, payload)
 
 
+@router.get("/hostels/{hostel_id}/transfers", response_model=list[StudentTransferResponse])
+async def list_hostel_transfers(
+    hostel_id: str,
+    db: DBSession,
+    current_user: AdminUser,
+):
+    """**Hostel transfer requests** — List incoming and outgoing transfer requests for a hostel."""
+    from app.schemas.transfer import StudentTransferResponse
+    from app.services.transfer_service import TransferService
+    _check_hostel(current_user, hostel_id)
+    return await TransferService(db).list_hostel_transfers(admin_id=current_user.id, hostel_id=hostel_id)
+
+
+@router.post("/transfers/{transfer_id}/action", response_model=StudentTransferResponse)
+async def process_transfer_action(
+    transfer_id: str,
+    payload: StudentTransferActionRequest,
+    db: DBSession,
+    current_user: AdminUser,
+):
+    """**Approve or Reject transfer request** — Process approval or rejection for a student transfer request."""
+    from app.schemas.transfer import StudentTransferActionRequest, StudentTransferResponse
+    from app.services.transfer_service import TransferService
+    return await TransferService(db).process_transfer_action(admin_id=current_user.id, transfer_id=transfer_id, payload=payload)
+
+
 @router.patch("/hostels/{hostel_id}/complaints/{complaint_id}", response_model=ComplaintResponse)
 async def update_complaint(
     hostel_id: str,

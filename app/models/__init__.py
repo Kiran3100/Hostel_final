@@ -42,6 +42,7 @@ from app.models.operations import (  # noqa: F401
 )
 from app.models.contact import ContactLead  # noqa: F401
 from app.models.billing import BillingPayment, Invoice  # noqa: F401
+from app.models.transfer import StudentTransferRequest, TransferType, TransferStatus  # noqa: F401
 
 __all__ = [
     # user

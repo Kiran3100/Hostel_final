@@ -22,6 +22,7 @@ class StudentStatus(str, enum.Enum):
     ACTIVE = "active"
     CHECKED_OUT = "checked_out"
     ON_LEAVE = "on_leave"
+    TRANSFERRED = "transferred"
 
 
 class Student(BaseModel):
