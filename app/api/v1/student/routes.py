@@ -34,6 +34,7 @@ import re
 from datetime import UTC, datetime
 from app.core.security import verify_password, hash_password
 from app.repositories.user_repository import UserRepository
+from app.schemas.transfer import StudentTransferResponse, StudentTransferCreateRequest
 
 class StudentProfileUpdateRequest(PydanticBaseModel):
     full_name: str | None = None

@@ -22,7 +22,10 @@ from app.schemas.room import (
     BedCreateRequest,
     BedUpdateRequest,
 )
-
+from app.schemas.transfer import (
+    StudentTransferResponse,
+    StudentTransferActionRequest,
+)
 from app.schemas.booking import (
     BookingResponse,
     BookingApprovalRequest,
