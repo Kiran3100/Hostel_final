@@ -482,18 +482,30 @@ class AdminService:
             raise HTTPException(status_code=400, detail="Bed does not belong to this hostel.")
         # Parse dates early
         try:
-            # Accept both "YYYY-MM-DD" and full datetime strings like "2024-05-15T10:00:00"
+            # Accept multiple formats including Indian format (DD-MM-YYYY) and ISO (YYYY-MM-DD)
             def parse_flexible_datetime(val: str) -> datetime:
-                for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
+                val = val.strip()
+                for fmt in (
+                    "%Y-%m-%dT%H:%M:%S",   # 2024-05-15T10:00:00
+                    "%Y-%m-%dT%H:%M",       # 2024-05-15T10:00
+                    "%Y-%m-%d %H:%M:%S",    # 2024-05-15 10:00:00
+                    "%Y-%m-%d %H:%M",       # 2024-05-15 10:00
+                    "%Y-%m-%d",             # 2024-05-15
+                    "%d-%m-%Y %H:%M:%S",   # 30-07-2026 12:45:00 (Indian)
+                    "%d-%m-%Y %H:%M",       # 30-07-2026 12:45 (Indian)
+                    "%d-%m-%Y",             # 30-07-2026 (Indian)
+                    "%d/%m/%Y %H:%M",       # 30/07/2026 12:45
+                    "%d/%m/%Y",             # 30/07/2026
+                ):
                     try:
-                        return datetime.strptime(val.replace("Z", ""), fmt.replace("Z", ""))
+                        return datetime.strptime(val.replace("Z", ""), fmt)
                     except ValueError:
                         continue
                 raise ValueError(f"Cannot parse date: {val}")
             check_in = parse_flexible_datetime(payload.check_in_date)
             check_out = parse_flexible_datetime(payload.check_out_date)
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS.")
+            raise HTTPException(status_code=400, detail=f"Invalid date format. Received: '{payload.check_in_date}'. Use YYYY-MM-DD or DD-MM-YYYY format.")
 
         if check_out <= check_in:
             raise HTTPException(status_code=400, detail="check_out_date must be after check_in_date.")
