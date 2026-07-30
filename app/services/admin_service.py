@@ -677,9 +677,27 @@ class AdminService:
             status=StudentStatus.ACTIVE,
         )
         self.session.add(student)
+        await self.session.flush()  # flush to get student.id
+
+        # ── Auto-create pending payment ───────────────────────────────
+        # When admin adds tenant directly, create a pending payment record
+        # so the finance dashboard immediately shows it as outstanding.
+        from app.models.payment import Payment
+        pending_payment = Payment(
+            hostel_id=hostel_id,
+            booking_id=str(booking.id),
+            student_id=str(student.id),
+            amount=grand_total,
+            payment_type="rent",
+            payment_method="offline",
+            status="pending",
+            due_date=check_in.date() if hasattr(check_in, "date") else check_in,
+        )
+        self.session.add(pending_payment)
 
         await self.session.commit()
         await self.session.refresh(student)
+        await self.session.refresh(pending_payment)
 
         return {
             "student_id": str(student.id),
@@ -692,9 +710,22 @@ class AdminService:
             "room_id": str(student.room_id),
             "bed_id": str(student.bed_id),
             "check_in_date": str(student.check_in_date),
-            "gender": gender_value,  # ← ADD THIS
-            "date_of_birth": str(date_of_birth) if date_of_birth else None,  # ← ADD THIS
+            "gender": gender_value,
+            "date_of_birth": str(date_of_birth) if date_of_birth else None,
+            "booking_mode": booking.booking_mode.value,
+            "total_hours": total_hours,
+            "total_nights": total_nights,
+            "total_months": total_months,
+            "base_rent_amount": base_rent,
+            "security_deposit": security_deposit,
+            "grand_total": grand_total,
+            # Auto-created payment
+            "payment_id": str(pending_payment.id),
+            "payment_status": pending_payment.status,
+            "payment_amount": float(grand_total),
+            "payment_due_date": str(pending_payment.due_date),
         }
+
 
     async def delete_room(self, room_id: str) -> None:
         """Delete a room and all its associated data"""
