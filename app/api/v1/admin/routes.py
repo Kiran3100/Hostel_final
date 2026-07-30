@@ -1505,6 +1505,113 @@ async def get_room_bed_stats(room_id: str, db: DBSession, current_user: AdminUse
         "capacity": None  # Will be filled by caller
     }
 
+
+@router.get("/rooms/{room_id}/price-preview")
+async def get_room_price_preview(
+    room_id: str,
+    db: DBSession,
+    current_user: AdminUser,
+    booking_mode: str = "monthly",
+    check_in_date: str | None = None,
+    check_out_date: str | None = None,
+):
+    """**Price Preview** — Calculate rent breakdown for a room before adding a tenant.
+
+    Use this endpoint to show a live price summary inside the Add Tenant form.
+
+    Returns: base_rent, security_deposit, grand_total, duration details.
+    """
+    from app.models.room import Room
+    from app.models.booking import BookingMode
+    from datetime import datetime
+
+    room_hostel_id = await _resolve_room_hostel_id(db, room_id)
+    _check_hostel(current_user, room_hostel_id)
+
+    room_res = await db.execute(select(Room).where(Room.id == room_id))
+    room = room_res.scalar_one_or_none()
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found.")
+
+    # Validate booking mode
+    try:
+        mode = BookingMode(booking_mode.lower())
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid booking_mode '{booking_mode}'. Use: hourly, daily, monthly.")
+
+    # Parse dates if provided
+    def _parse_dt(val: str) -> datetime:
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%d", "%d-%m-%Y %H:%M", "%d-%m-%Y"):
+            try:
+                return datetime.strptime(val.strip(), fmt)
+            except ValueError:
+                continue
+        raise HTTPException(status_code=400, detail=f"Cannot parse date: '{val}'. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM.")
+
+    total_hours = total_nights = total_months = None
+    duration_label = ""
+
+    if check_in_date and check_out_date:
+        check_in = _parse_dt(check_in_date)
+        check_out = _parse_dt(check_out_date)
+        if check_out <= check_in:
+            raise HTTPException(status_code=400, detail="check_out_date must be after check_in_date.")
+
+        if mode == BookingMode.HOURLY:
+            total_hours = max(1, int((check_out - check_in).total_seconds() / 3600))
+            duration_label = f"{total_hours} hour(s)"
+        elif mode == BookingMode.DAILY:
+            total_nights = max(1, (check_out - check_in).days)
+            duration_label = f"{total_nights} night(s)"
+        else:
+            s, e = check_in, check_out
+            total_months = (e.year - s.year) * 12 + (e.month - s.month)
+            if e.day < s.day:
+                total_months -= 1
+            total_months = max(1, total_months)
+            duration_label = f"{total_months} month(s)"
+    else:
+        # No dates provided — return per-unit rates only
+        total_hours = 1 if mode == BookingMode.HOURLY else None
+        total_nights = 1 if mode == BookingMode.DAILY else None
+        total_months = 1 if mode == BookingMode.MONTHLY else None
+        duration_label = "per unit"
+
+    # Calculate base rent
+    if mode == BookingMode.HOURLY:
+        rate = float(room.hourly_rent or 0)
+        units = total_hours or 1
+        is_configured = rate > 0
+    elif mode == BookingMode.DAILY:
+        rate = float(room.daily_rent or 0)
+        units = total_nights or 1
+        is_configured = rate > 0
+    else:
+        rate = float(room.monthly_rent or 0)
+        units = total_months or 1
+        is_configured = rate > 0
+
+    base_rent = rate * units
+    security_deposit = float(room.security_deposit or 0)
+    grand_total = base_rent + security_deposit
+
+    return {
+        "room_id": room_id,
+        "room_number": room.room_number,
+        "booking_mode": mode.value,
+        "rate_per_unit": rate,
+        "unit_label": "hour" if mode == BookingMode.HOURLY else ("night" if mode == BookingMode.DAILY else "month"),
+        "total_hours": total_hours,
+        "total_nights": total_nights,
+        "total_months": total_months,
+        "duration_label": duration_label,
+        "base_rent": base_rent,
+        "security_deposit": security_deposit,
+        "grand_total": grand_total,
+        "is_configured": is_configured,
+        "warning": None if is_configured else f"No {mode.value} rate set for this room. Please configure it in Room Settings.",
+    }
+
 @router.get("/rooms/{room_id}/beds/stats")
 async def get_room_bed_stats(room_id: str, db: DBSession, current_user: AdminUser):
     """Get bed statistics for a room."""
