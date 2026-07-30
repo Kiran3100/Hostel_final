@@ -286,10 +286,6 @@ async def get_hostel_rooms(
     - `booking_mode=daily`  — only returns rooms with `daily_rent > 0`
     - `booking_mode=monthly` — only returns rooms with `monthly_rent > 0` (default)
     """
-    from app.models.room import Room
-    from sqlalchemy import select, and_
-    from app.models.room import RoomStatus
-
     rooms = await HostelService(db).list_hostel_rooms(hostel_id)
 
     # Filter out rooms that have no rate configured for the requested mode
