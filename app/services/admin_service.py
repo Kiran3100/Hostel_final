@@ -160,10 +160,12 @@ class AdminService:
     async def create_room(self, hostel_id: str, payload: RoomCreateRequest) -> Room:
         """
         Create a new room in a hostel and automatically create its beds.
-        
-        Fixed bug: bed_number now uses instance attribute room.room_number 
+
+        Fixed bug: bed_number now uses instance attribute room.room_number
         instead of class attribute Room.room_number which created invalid SQL.
         """
+        from sqlalchemy.exc import IntegrityError
+
         # Create the room
         room = Room(
             hostel_id=hostel_id,
@@ -171,7 +173,7 @@ class AdminService:
             floor=payload.floor,
             room_type=payload.room_type.upper().replace("-", "_") if payload.room_type else None,
             total_beds=payload.total_beds,
-            hourly_rent=payload.hourly_rent,      # ← was missing, always defaulted to 0
+            hourly_rent=payload.hourly_rent,
             daily_rent=payload.daily_rent,
             monthly_rent=payload.monthly_rent,
             security_deposit=payload.security_deposit,
@@ -179,8 +181,18 @@ class AdminService:
             is_active=True,
         )
         self.session.add(room)
-        await self.session.flush()  # ← Obtain room.id
-        
+        try:
+            await self.session.flush()  # ← Obtain room.id, raises on duplicate
+        except IntegrityError as e:
+            await self.session.rollback()
+            err = str(e).lower()
+            if "uq_room_hostel_number" in err or "duplicate key" in err:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Room number '{payload.room_number}' already exists in this hostel. Please use a different room number.",
+                )
+            raise HTTPException(status_code=400, detail="Room creation failed due to a data conflict.")
+
         # ✅ FIX: Use instance attribute room.room_number (string value)
         # instead of class attribute Room.room_number (SQL column expression)
         for i in range(room.total_beds):
