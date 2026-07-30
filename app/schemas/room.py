@@ -54,7 +54,7 @@ class RoomResponse(TimestampedResponse):
     floor: int
     room_type: str
     total_beds: int
-    hourly_rent: float
+    hourly_rent: float = 0.0
     daily_rent: float
     monthly_rent: float
     security_deposit: float
