@@ -137,3 +137,31 @@ class StudentProfileUpdateRequest(BaseModel):
     """Request model for updating student profile"""
     full_name: str | None = Field(default=None, min_length=2, max_length=255)
     phone: str | None = Field(default=None, min_length=8, max_length=30)
+
+
+class RoommateItem(BaseModel):
+    id: str
+    user_id: str
+    full_name: str
+    phone: str | None = None
+    email: str | None = None
+    bed_number: str | None = None
+
+
+class RoomInfo(BaseModel):
+    id: str
+    room_number: str
+    floor: int | None = None
+    room_type: str | None = None
+    total_beds: int | None = None
+
+
+class BedInfo(BaseModel):
+    id: str | None = None
+    bed_number: str | None = None
+
+
+class StudentRoommatesResponse(BaseModel):
+    room: RoomInfo
+    bed: BedInfo
+    roommates: list[RoommateItem]

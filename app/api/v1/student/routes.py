@@ -12,7 +12,7 @@ from app.schemas.booking import BookingResponse, WaitlistEntryResponse
 from app.schemas.complaint import ComplaintCreateRequest, ComplaintResponse
 from app.schemas.mess_menu import MessMenuResponse
 from app.schemas.payment import PaymentResponse
-from app.schemas.student import StudentProfileResponse
+from app.schemas.student import StudentProfileResponse, StudentResponse, StudentRoommatesResponse
 from app.schemas.upload import PresignedUploadRequest, PresignedUploadResponse
 from app.integrations.s3 import get_s3_client
 from app.services.booking_service import BookingService
@@ -21,12 +21,11 @@ from app.services.payment_service import PaymentService
 from app.services.student_read_service import StudentReadService
 from app.services.notice_service import NoticeService
 from app.models.operations import Complaint, ComplaintComment
-from app.models.student import Student
+from app.models.student import Student, StudentStatus
 from app.models.user import User
 from app.models.hostel import Hostel
 from app.models.room import Room, Bed
 from app.models.booking import Booking
-from app.schemas.student import StudentResponse
 from pydantic import BaseModel as PydanticBaseModel
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel, Field
@@ -150,6 +149,78 @@ async def get_detailed_student_profile(current_user: StudentUser, db: DBSession)
         },
         "created_at": student.created_at,
         "updated_at": student.updated_at,
+    }
+
+
+@router.get("/roommates", response_model=StudentRoommatesResponse)
+async def get_my_roommates(current_user: StudentUser, db: DBSession):
+    """**My Roommates** — Get current student's room details, bed details, and roommate information only."""
+    # 1. Get active student record for logged-in user
+    student_res = await db.execute(
+        select(Student)
+        .where(
+            Student.user_id == current_user.id,
+            Student.status.in_([StudentStatus.ACTIVE, StudentStatus.ON_LEAVE]),
+        )
+        .order_by(Student.created_at.desc())
+    )
+    student = student_res.scalars().first()
+
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Active student record not found."
+        )
+
+    # 2. Get room details
+    room_res = await db.execute(select(Room).where(Room.id == student.room_id))
+    room = room_res.scalar_one_or_none()
+    if not room:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assigned room not found."
+        )
+
+    # 3. Get student's bed details
+    bed_res = await db.execute(select(Bed).where(Bed.id == student.bed_id))
+    bed = bed_res.scalar_one_or_none()
+
+    # 4. Get other roommates assigned to the same room
+    roommates_res = await db.execute(
+        select(Student, User, Bed)
+        .join(User, User.id == Student.user_id)
+        .outerjoin(Bed, Bed.id == Student.bed_id)
+        .where(
+            Student.room_id == student.room_id,
+            Student.id != student.id,
+            Student.status.in_([StudentStatus.ACTIVE, StudentStatus.ON_LEAVE]),
+        )
+    )
+
+    roommate_items = []
+    for s, u, b in roommates_res.all():
+        roommate_items.append({
+            "id": str(s.id),
+            "user_id": str(u.id),
+            "full_name": u.full_name,
+            "phone": u.phone,
+            "email": u.email,
+            "bed_number": b.bed_number if b else None,
+        })
+
+    return {
+        "room": {
+            "id": str(room.id),
+            "room_number": room.room_number,
+            "floor": room.floor,
+            "room_type": room.room_type.value if hasattr(room.room_type, "value") else str(room.room_type),
+            "total_beds": room.total_beds,
+        },
+        "bed": {
+            "id": str(bed.id) if bed else None,
+            "bed_number": bed.bed_number if bed else None,
+        },
+        "roommates": roommate_items,
     }
 
 
