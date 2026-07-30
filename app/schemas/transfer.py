@@ -41,3 +41,6 @@ class StudentTransferResponse(TimestampedResponse):
     to_hostel_name: str | None = None
     to_room_number: str | None = None
     to_bed_number: str | None = None
+
+    # ⚠️ Spec warning: open/pending complaints (not a hard block per spec)
+    warning: str | None = None

@@ -48,6 +48,17 @@ class TransferService:
         )
         return result.scalar_one_or_none() is not None
 
+    async def _has_open_complaints(self, student_id: str) -> bool:
+        """Spec warning rule: student has open/pending complaints. Not a hard block — returns warning."""
+        from app.models.operations import Complaint
+        result = await self.session.execute(
+            select(Complaint.id).where(
+                Complaint.student_id == student_id,
+                Complaint.status.in_(["open", "pending", "in_progress"]),
+            )
+        )
+        return result.scalar_one_or_none() is not None
+
     async def _has_available_beds(self, hostel_id: str) -> bool:
         """TC-INT-05 / TC-EXT: Check if target hostel has at least one available bed."""
         result = await self.session.execute(
@@ -171,7 +182,14 @@ class TransferService:
         transfer_req = await self.repository.create_transfer_request(transfer_req)
         await self.session.commit()
         await self.session.refresh(transfer_req)
-        return await self._to_response(transfer_req)
+
+        resp = await self._to_response(transfer_req)
+        # Spec: open complaint is a WARNING (not hard block)
+        if await self._has_open_complaints(str(student.id)):
+            resp.warning = (
+                "⚠️ You have open/pending complaints. Admin is advised to resolve them before approving the transfer."
+            )
+        return resp
 
     async def process_transfer_action(
         self, *, admin_id: str, transfer_id: str, payload: StudentTransferActionRequest
@@ -417,6 +435,55 @@ class TransferService:
             )
         requests = await self.repository.list_transfers_by_hostel(hostel_id)
         return [await self._to_response(r) for r in requests]
+
+    async def list_transferred_out_students(
+        self, admin_id: str, hostel_id: str
+    ) -> list[dict]:
+        """TC-EXT-06 / Spec: Old admin sees students who transferred OUT as READ-ONLY profiles.
+        Returns student profiles marked as 'Transferred' for audit and legal purposes."""
+        admin_hostels = await self._get_admin_hostels(admin_id)
+        if hostel_id not in admin_hostels:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this hostel.",
+            )
+
+        # Find all COMPLETED external transfers FROM this hostel
+        result = await self.session.execute(
+            select(StudentTransferRequest).where(
+                StudentTransferRequest.from_hostel_id == hostel_id,
+                StudentTransferRequest.transfer_type == TransferType.EXTERNAL,
+                StudentTransferRequest.status == TransferStatus.COMPLETED,
+            ).order_by(StudentTransferRequest.completed_at.desc())
+        )
+        completed_transfers = result.scalars().all()
+
+        profiles = []
+        for transfer in completed_transfers:
+            student = await self.session.get(Student, transfer.student_id)
+            if not student:
+                continue
+            user = await self.session.get(User, student.user_id)
+            to_hostel = await self.session.get(Hostel, transfer.to_hostel_id)
+
+            profiles.append({
+                "student_id": str(transfer.student_id),
+                "transfer_id": str(transfer.id),
+                "student_number": student.student_number,
+                "full_name": user.full_name if user else None,
+                "email": user.email if user else None,
+                "phone": user.phone if user else None,
+                "transferred_to_hostel": to_hostel.name if to_hostel else None,
+                "transferred_to_hostel_id": str(transfer.to_hostel_id),
+                "transfer_completed_at": transfer.completed_at.isoformat() if transfer.completed_at else None,
+                "original_check_in_date": str(student.check_in_date),
+                # ⚠️ READ-ONLY: This student has transferred. Do not attempt to edit.
+                "access_level": "READ_ONLY",
+                "status_label": "TRANSFERRED",
+            })
+
+        return profiles
+
 
     async def _to_response(
         self, req: StudentTransferRequest

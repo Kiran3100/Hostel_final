@@ -922,6 +922,22 @@ async def list_hostel_transfers(
     return await TransferService(db).list_hostel_transfers(admin_id=current_user.id, hostel_id=hostel_id)
 
 
+@router.get("/hostels/{hostel_id}/transferred-students")
+async def list_transferred_out_students(
+    hostel_id: str,
+    db: DBSession,
+    current_user: AdminUser,
+):
+    """**Transferred-out students (READ-ONLY)** — TC-EXT-06: Old admin sees students who
+    externally transferred out. Profiles are marked as TRANSFERRED and are read-only.
+    Historical payments, complaints, and attendance for this hostel remain visible for audit."""
+    from app.services.transfer_service import TransferService
+    _check_hostel(current_user, hostel_id)
+    return await TransferService(db).list_transferred_out_students(admin_id=current_user.id, hostel_id=hostel_id)
+
+
+
+
 @router.post("/transfers/{transfer_id}/action", response_model=StudentTransferResponse)
 async def process_transfer_action(
     transfer_id: str,
