@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,14 +54,14 @@ class BookingRepository:
         )
         return list(result.scalars().all())
 
-    async def has_overlap(self, *, bed_id: str, start_date: date, end_date: date, exclude_booking_id: str | None = None) -> bool:
+    async def has_overlap(self, *, bed_id: str, start_date: datetime, end_date: datetime, exclude_booking_id: str | None = None) -> bool:
         """
         Check if there's an overlapping BedStay for the given bed and dates.
         """
-        from datetime import date as dt_date
+        from datetime import datetime as dt_datetime
         from sqlalchemy import case, func
 
-        today = dt_date.today()
+        today = func.now()
 
         effective_end_date = case(
             (BedStay.status == BedStayStatus.ACTIVE, func.greatest(BedStay.end_date, today)),
@@ -83,7 +83,7 @@ class BookingRepository:
         result = await self.session.execute(query)
         return result.scalar_one_or_none() is not None
     
-    async def is_bed_available(self, *, bed_id: str, start_date: date, end_date: date) -> bool:
+    async def is_bed_available(self, *, bed_id: str, start_date: datetime, end_date: datetime) -> bool:
         """
         Check if a bed is available for the given date range.
         

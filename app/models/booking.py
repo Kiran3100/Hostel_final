@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import enum
-from datetime import date
+from datetime import date, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, Date, Enum, ForeignKey, Numeric, String, Text
+from sqlalchemy import CheckConstraint, Date, DateTime, Enum, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 
 class BookingMode(str, enum.Enum):
+    HOURLY = "hourly"
     DAILY = "daily"
     MONTHLY = "monthly"
 
@@ -67,8 +68,9 @@ class Booking(BaseModel):
     )
     booking_mode: Mapped[BookingMode] = mapped_column(Enum(BookingMode), index=True)
     status: Mapped[BookingStatus] = mapped_column(Enum(BookingStatus), index=True)
-    check_in_date: Mapped[date] = mapped_column(Date)
-    check_out_date: Mapped[date] = mapped_column(Date)
+    check_in_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    check_out_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    total_hours: Mapped[int | None] = mapped_column(nullable=True)
     total_nights: Mapped[int | None] = mapped_column(nullable=True)
     total_months: Mapped[int | None] = mapped_column(nullable=True)
     base_rent_amount: Mapped[float] = mapped_column(Numeric(10, 2))
@@ -145,8 +147,8 @@ class BedStay(BaseModel):
     student_id: Mapped[str | None] = mapped_column(
         ForeignKey("students.id", ondelete="CASCADE"), nullable=True, index=True
     )
-    start_date: Mapped[date] = mapped_column(Date)
-    end_date: Mapped[date] = mapped_column(Date)
+    start_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    end_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     status: Mapped[BedStayStatus] = mapped_column(Enum(BedStayStatus), index=True)
 
     booking: Mapped[Booking | None] = relationship("Booking", back_populates="bed_stays")
@@ -178,8 +180,8 @@ class WaitlistEntry(BaseModel):
     )
     room_id: Mapped[str] = mapped_column(ForeignKey("rooms.id", ondelete="CASCADE"), index=True)
     bed_id: Mapped[str | None] = mapped_column(ForeignKey("beds.id", ondelete="CASCADE"), nullable=True, index=True)
-    check_in_date: Mapped[date] = mapped_column(Date)
-    check_out_date: Mapped[date] = mapped_column(Date)
+    check_in_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    check_out_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     booking_mode: Mapped[BookingMode] = mapped_column(Enum(BookingMode), index=True)
     status: Mapped[WaitlistStatus] = mapped_column(Enum(WaitlistStatus), index=True, default=WaitlistStatus.ACTIVE)
     notified_at: Mapped[date | None] = mapped_column(Date, nullable=True)

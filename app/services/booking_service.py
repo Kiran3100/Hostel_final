@@ -65,8 +65,13 @@ class BookingService:
         total_nights: int | None = None
         total_months: int | None = None
 
-        if mode == BookingMode.DAILY:
-            total_nights = (payload.check_out_date - payload.check_in_date).days
+        total_hours: int | None = None
+
+        if mode == BookingMode.HOURLY:
+            diff = payload.check_out_date - payload.check_in_date
+            total_hours = max(1, int(diff.total_seconds() / 3600))
+        elif mode == BookingMode.DAILY:
+            total_nights = max(1, (payload.check_out_date - payload.check_in_date).days)
         else:
             s, e = payload.check_in_date, payload.check_out_date
             total_months = (e.year - s.year) * 12 + (e.month - s.month)
@@ -88,6 +93,7 @@ class BookingService:
             status=BookingStatus.PAYMENT_PENDING,
             check_in_date=payload.check_in_date,
             check_out_date=payload.check_out_date,
+            total_hours=total_hours,
             total_nights=total_nights,
             total_months=total_months,
             base_rent_amount=payload.base_rent_amount or 0,
@@ -169,8 +175,13 @@ class BookingService:
         mode = BookingMode(payload.booking_mode)
         total_nights: int | None = None
         total_months: int | None = None
-        if mode == BookingMode.DAILY:
-            total_nights = (payload.check_out_date - payload.check_in_date).days
+        total_hours: int | None = None
+        
+        if mode == BookingMode.HOURLY:
+            diff = payload.check_out_date - payload.check_in_date
+            total_hours = max(1, int(diff.total_seconds() / 3600))
+        elif mode == BookingMode.DAILY:
+            total_nights = max(1, (payload.check_out_date - payload.check_in_date).days)
         else:
             s, e = payload.check_in_date, payload.check_out_date
             total_months = (e.year - s.year) * 12 + (e.month - s.month)
@@ -192,6 +203,7 @@ class BookingService:
             status=BookingStatus.DRAFT,
             check_in_date=payload.check_in_date,
             check_out_date=payload.check_out_date,
+            total_hours=total_hours,
             total_nights=total_nights,
             total_months=total_months,
             base_rent_amount=payload.base_rent_amount,

@@ -43,6 +43,7 @@ class Room(BaseModel):
     floor: Mapped[int]
     room_type: Mapped[RoomType] = mapped_column(Enum(RoomType), index=True)
     total_beds: Mapped[int]
+    hourly_rent: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
     daily_rent: Mapped[float] = mapped_column(Numeric(10, 2))
     monthly_rent: Mapped[float] = mapped_column(Numeric(10, 2))
     security_deposit: Mapped[float] = mapped_column(Numeric(10, 2))

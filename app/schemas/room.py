@@ -7,6 +7,7 @@ class RoomCreateRequest(BaseModel):
     floor: int = Field(ge=0)
     room_type: str = Field(min_length=2, max_length=50)
     total_beds: int = Field(ge=1)
+    hourly_rent: float = Field(ge=0, default=0)
     daily_rent: float = Field(ge=0)
     monthly_rent: float = Field(ge=0)
     security_deposit: float = Field(ge=0)
@@ -19,6 +20,7 @@ class RoomUpdateRequest(BaseModel):
     floor: int | None = Field(default=None, ge=0)
     room_type: str | None = Field(default=None, min_length=2, max_length=50)
     total_beds: int | None = Field(default=None, ge=1)
+    hourly_rent: float | None = Field(default=None, ge=0)
     daily_rent: float | None = Field(default=None, ge=0)
     monthly_rent: float | None = Field(default=None, ge=0)
     security_deposit: float | None = Field(default=None, ge=0)
@@ -52,6 +54,7 @@ class RoomResponse(TimestampedResponse):
     floor: int
     room_type: str
     total_beds: int
+    hourly_rent: float
     daily_rent: float
     monthly_rent: float
     security_deposit: float

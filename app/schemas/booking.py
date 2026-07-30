@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from app.schemas.base import TimestampedResponse
@@ -8,6 +8,7 @@ from sqlalchemy import func
 
 
 class BookingModeEnum(str, Enum):
+    HOURLY = "hourly"
     DAILY = "daily"
     MONTHLY = "monthly"
 
@@ -17,8 +18,8 @@ class BookingCreateRequest(BaseModel):
     room_id: str
     bed_id: Optional[str] = None  # Can be assigned later during approval
     booking_mode: BookingModeEnum
-    check_in_date: date
-    check_out_date: date
+    check_in_date: datetime
+    check_out_date: datetime
     full_name: str = Field(min_length=2, max_length=255, pattern=r"^[A-Za-z\s\-\']+$")
     date_of_birth: Optional[date] = None
     gender: Optional[str] = Field(None, max_length=50)
@@ -70,8 +71,9 @@ class BookingResponse(TimestampedResponse):
     hostel_id: str
     room_id: str
     bed_id: str | None = None
-    check_in_date: date
-    check_out_date: date
+    check_in_date: datetime
+    check_out_date: datetime
+    total_hours: int | None = None
     total_nights: int | None = None
     total_months: int | None = None
     base_rent_amount: float
@@ -91,8 +93,8 @@ class BookingInitiateRequest(BaseModel):
     room_id: str
     bed_id: str | None = None
     booking_mode: BookingModeEnum
-    check_in_date: date
-    check_out_date: date
+    check_in_date: datetime
+    check_out_date: datetime
     base_rent_amount: float = Field(ge=0)
     security_deposit: float = Field(ge=0, default=0)
     booking_advance: float = Field(ge=0, default=0)
@@ -155,15 +157,15 @@ class WaitlistJoinRequest(BaseModel):
     room_id: str
     bed_id: str | None = None
     booking_mode: BookingModeEnum
-    check_in_date: date
-    check_out_date: date
+    check_in_date: datetime
+    check_out_date: datetime
     
     @model_validator(mode="after")
     def validate_dates(self) -> "WaitlistJoinRequest":
-        from datetime import date as date_type
+        from datetime import datetime as datetime_type
         if self.check_out_date <= self.check_in_date:
             raise ValueError("check_out_date must be after check_in_date")
-        if self.check_in_date < date_type.today():
+        if self.check_in_date.date() < datetime_type.today().date():
             raise ValueError("check_in_date cannot be in the past")
         return self
 
@@ -174,7 +176,7 @@ class WaitlistEntryResponse(TimestampedResponse):
     room_id: str
     bed_id: str | None = None
     booking_mode: str
-    check_in_date: date
-    check_out_date: date
+    check_in_date: datetime
+    check_out_date: datetime
     status: str
     position: int
