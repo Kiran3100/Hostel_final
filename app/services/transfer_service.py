@@ -48,6 +48,36 @@ class TransferService:
         )
         return result.scalar_one_or_none() is not None
 
+    async def _has_available_beds(self, hostel_id: str) -> bool:
+        """TC-INT-05 / TC-EXT: Check if target hostel has at least one available bed."""
+        result = await self.session.execute(
+            select(Bed.id)
+            .join(Room, Bed.room_id == Room.id)
+            .where(
+                Room.hostel_id == hostel_id,
+                Bed.status == BedStatus.AVAILABLE,
+                Room.is_active == True,
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
+    @staticmethod
+    async def was_externally_transferred_out(
+        session: AsyncSession, student_id: str, hostel_id: str
+    ) -> bool:
+        """TC-EXT-06: Returns True if student was externally transferred OUT of this hostel.
+        Use this in admin write endpoints to enforce read-only access on historical data."""
+        result = await session.execute(
+            select(StudentTransferRequest.id).where(
+                StudentTransferRequest.student_id == student_id,
+                StudentTransferRequest.from_hostel_id == hostel_id,
+                StudentTransferRequest.transfer_type == TransferType.EXTERNAL,
+                StudentTransferRequest.status == TransferStatus.COMPLETED,
+            )
+        )
+        return result.scalar_one_or_none() is not None
+
     async def request_transfer(
         self, *, user_id: str, payload: StudentTransferCreateRequest
     ) -> StudentTransferResponse:
@@ -89,7 +119,14 @@ class TransferService:
                 detail="Target hostel not found.",
             )
 
-        # 4. Block if student already has a pending transfer
+        # 4. TC-INT-05: Block if target hostel has no available beds
+        if not await self._has_available_beds(payload.to_hostel_id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Transfer not possible: the target hostel has no available beds at the moment.",
+            )
+
+        # 5. Block if student already has a pending transfer
         active_req = await self.repository.get_active_transfer_for_student(str(student.id))
         if active_req:
             raise HTTPException(

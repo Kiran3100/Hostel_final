@@ -947,7 +947,25 @@ async def update_complaint(
     _check_hostel(current_user, complaint_hostel_id)
     if complaint_hostel_id != hostel_id:
         raise HTTPException(status_code=400, detail="Complaint does not belong to the specified hostel.")
+
+    # TC-EXT-06: Read-only guard — if student was externally transferred OUT of this hostel,
+    # old admin can only VIEW records, not edit them.
+    from app.models.operations import Complaint as ComplaintModel
+    from app.services.transfer_service import TransferService
+    complaint_row = await db.execute(
+        select(ComplaintModel).where(ComplaintModel.id == complaint_id)
+    )
+    complaint_obj = complaint_row.scalar_one_or_none()
+    if complaint_obj and await TransferService.was_externally_transferred_out(
+        db, str(complaint_obj.student_id), hostel_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This student has been externally transferred out. Historical records are read-only for audit purposes.",
+        )
+
     return await ComplaintService(db).update_admin_complaint(hostel_id=hostel_id, complaint_id=complaint_id, payload=payload)
+
 
 @router.get("/hostels/{hostel_id}/notices/paginated")
 async def list_notices_paginated(
