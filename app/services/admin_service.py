@@ -1,7 +1,7 @@
 """
 Admin service – hostel management operations.
 """
-from datetime import date
+from datetime import date, datetime
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import hash_password
@@ -482,10 +482,18 @@ class AdminService:
             raise HTTPException(status_code=400, detail="Bed does not belong to this hostel.")
         # Parse dates early
         try:
-            check_in = date.fromisoformat(payload.check_in_date)
-            check_out = date.fromisoformat(payload.check_out_date)
+            # Accept both "YYYY-MM-DD" and full datetime strings like "2024-05-15T10:00:00"
+            def parse_flexible_datetime(val: str) -> datetime:
+                for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
+                    try:
+                        return datetime.strptime(val.replace("Z", ""), fmt.replace("Z", ""))
+                    except ValueError:
+                        continue
+                raise ValueError(f"Cannot parse date: {val}")
+            check_in = parse_flexible_datetime(payload.check_in_date)
+            check_out = parse_flexible_datetime(payload.check_out_date)
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS.")
 
         if check_out <= check_in:
             raise HTTPException(status_code=400, detail="check_out_date must be after check_in_date.")
@@ -554,8 +562,8 @@ class AdminService:
                 raise HTTPException(status_code=409, detail="A user with this phone number already exists.")
             raise
 
-        check_in = date.fromisoformat(payload.check_in_date)
-        check_out = date.fromisoformat(payload.check_out_date)
+        check_in = parse_flexible_datetime(payload.check_in_date)
+        check_out = parse_flexible_datetime(payload.check_out_date)
         booking_number = f"SE-{str(user.id)[:8].upper()}"
 
         # Parse date_of_birth if provided
