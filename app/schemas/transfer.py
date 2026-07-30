@@ -19,7 +19,8 @@ class StudentTransferActionRequest(BaseModel):
 
 
 class StudentTransferResponse(TimestampedResponse):
-    id: str
+    # id, created_at, updated_at inherited from TimestampedResponse
+    # from_attributes=True inherited from APIModel via TimestampedResponse
     student_id: str
     user_id: str
     from_hostel_id: str
@@ -34,11 +35,9 @@ class StudentTransferResponse(TimestampedResponse):
     new_admin_approved_at: datetime | None = None
     completed_at: datetime | None = None
 
+    # UI-convenience fields — populated at service layer
     student_name: str | None = None
     from_hostel_name: str | None = None
     to_hostel_name: str | None = None
     to_room_number: str | None = None
     to_bed_number: str | None = None
-
-    class Config:
-        from_attributes = True

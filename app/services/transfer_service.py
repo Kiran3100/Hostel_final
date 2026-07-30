@@ -352,7 +352,6 @@ class TransferService:
             booking_id=str(new_booking.id),
             student_id=str(student.id),
             hostel_id=req.to_hostel_id,
-            room_id=to_room_id,
             bed_id=to_bed_id,
             start_date=now,
             end_date=new_check_out,
