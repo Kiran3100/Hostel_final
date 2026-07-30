@@ -1,7 +1,7 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import HTTPException, status
-from sqlalchemy import select, and_
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.booking import (
@@ -12,10 +12,11 @@ from app.models.booking import (
     BookingStatus,
 )
 from app.models.hostel import AdminHostelMapping, Hostel
-from app.models.payment import Payment, PaymentStatus
+from app.models.payment import Payment
 from app.models.room import Bed, BedStatus, Room
 from app.models.student import Student, StudentStatus
 from app.models.transfer import StudentTransferRequest, TransferStatus, TransferType
+from app.models.user import User
 from app.repositories.transfer_repository import TransferRepository
 from app.schemas.transfer import (
     StudentTransferActionRequest,
@@ -35,13 +36,14 @@ class TransferService:
                 AdminHostelMapping.admin_id == admin_id
             )
         )
-        return set(result.scalars().all())
+        return set(str(h) for h in result.scalars().all())
 
     async def _has_pending_dues(self, student_id: str) -> bool:
+        """Check if student has pending/failed payments (Payment.status is a plain str)."""
         result = await self.session.execute(
             select(Payment.id).where(
                 Payment.student_id == student_id,
-                Payment.status.in_([PaymentStatus.PENDING, PaymentStatus.FAILED]),
+                Payment.status.in_(["pending", "created", "failed"]),
             )
         )
         return result.scalar_one_or_none() is not None
@@ -70,7 +72,7 @@ class TransferService:
                 detail="Cannot request transfer while you have unpaid dues/pending payments. Please clear your dues first.",
             )
 
-        # 3. Check target hostel
+        # 3. Check target hostel is different
         if payload.to_hostel_id == str(student.hostel_id):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -87,7 +89,7 @@ class TransferService:
                 detail="Target hostel not found.",
             )
 
-        # 4. Check active pending request
+        # 4. Block if student already has a pending transfer
         active_req = await self.repository.get_active_transfer_for_student(str(student.id))
         if active_req:
             raise HTTPException(
@@ -95,20 +97,20 @@ class TransferService:
                 detail="You already have an active transfer request in progress.",
             )
 
-        # 5. Check if same admin (Internal) vs different admin (External)
+        # 5. Detect Internal vs External transfer
         from_admins_res = await self.session.execute(
             select(AdminHostelMapping.admin_id).where(
                 AdminHostelMapping.hostel_id == student.hostel_id
             )
         )
-        from_admin_ids = set(from_admins_res.scalars().all())
+        from_admin_ids = set(str(a) for a in from_admins_res.scalars().all())
 
         to_admins_res = await self.session.execute(
             select(AdminHostelMapping.admin_id).where(
                 AdminHostelMapping.hostel_id == payload.to_hostel_id
             )
         )
-        to_admin_ids = set(to_admins_res.scalars().all())
+        to_admin_ids = set(str(a) for a in to_admins_res.scalars().all())
 
         if from_admin_ids.intersection(to_admin_ids):
             transfer_type = TransferType.INTERNAL
@@ -131,7 +133,7 @@ class TransferService:
 
         transfer_req = await self.repository.create_transfer_request(transfer_req)
         await self.session.commit()
-
+        await self.session.refresh(transfer_req)
         return await self._to_response(transfer_req)
 
     async def process_transfer_action(
@@ -145,7 +147,6 @@ class TransferService:
             )
 
         admin_hostels = await self._get_admin_hostels(admin_id)
-
         action = payload.action.lower().strip()
 
         if action == "reject":
@@ -164,7 +165,7 @@ class TransferService:
             target_bed_id = payload.to_bed_id or req.to_bed_id
 
             if req.transfer_type == TransferType.INTERNAL:
-                # Internal transfer: same admin
+                # Internal: same admin owns both hostels — 1-step approval
                 if req.from_hostel_id not in admin_hostels and req.to_hostel_id not in admin_hostels:
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
@@ -175,17 +176,16 @@ class TransferService:
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="Target room_id and bed_id are required to complete the transfer.",
                     )
-                await self._execute_transfer(
-                    req=req, to_room_id=target_room_id, to_bed_id=target_bed_id
-                )
+                await self._execute_transfer(req=req, to_room_id=target_room_id, to_bed_id=target_bed_id)
                 req.status = TransferStatus.COMPLETED
                 req.completed_at = datetime.now()
                 await self.session.commit()
                 return await self._to_response(req)
 
             else:
-                # External transfer: multi-step approval
+                # External: 2-step approval
                 if req.status == TransferStatus.PENDING_OLD_ADMIN:
+                    # Step 1: Old hostel admin approves
                     if req.from_hostel_id not in admin_hostels:
                         raise HTTPException(
                             status_code=status.HTTP_403_FORBIDDEN,
@@ -197,6 +197,7 @@ class TransferService:
                     return await self._to_response(req)
 
                 elif req.status == TransferStatus.PENDING_NEW_ADMIN:
+                    # Step 2: New hostel admin confirms with room+bed assignment
                     if req.to_hostel_id not in admin_hostels:
                         raise HTTPException(
                             status_code=status.HTTP_403_FORBIDDEN,
@@ -208,9 +209,7 @@ class TransferService:
                             detail="Target room_id and bed_id are required to complete the transfer.",
                         )
                     req.new_admin_approved_at = datetime.now()
-                    await self._execute_transfer(
-                        req=req, to_room_id=target_room_id, to_bed_id=target_bed_id
-                    )
+                    await self._execute_transfer(req=req, to_room_id=target_room_id, to_bed_id=target_bed_id)
                     req.status = TransferStatus.COMPLETED
                     req.completed_at = datetime.now()
                     await self.session.commit()
@@ -218,7 +217,7 @@ class TransferService:
                 else:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Cannot approve transfer in status: {req.status}",
+                        detail=f"Cannot approve a transfer in status: {req.status}",
                     )
         else:
             raise HTTPException(
@@ -229,7 +228,9 @@ class TransferService:
     async def _execute_transfer(
         self, *, req: StudentTransferRequest, to_room_id: str, to_bed_id: str
     ) -> None:
-        # Check target bed
+        now = datetime.now()
+
+        # Validate target bed
         bed_res = await self.session.execute(select(Bed).where(Bed.id == to_bed_id))
         bed = bed_res.scalar_one_or_none()
         if not bed or str(bed.room_id) != to_room_id:
@@ -248,12 +249,14 @@ class TransferService:
         )
         student = student_res.scalar_one_or_none()
         if not student:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Student record not found.",
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student record not found.")
 
-        # 1. Close old booking & bed stay
+        # Fetch student's user for full_name
+        user_res = await self.session.execute(select(User).where(User.id == student.user_id))
+        student_user = user_res.scalar_one_or_none()
+        full_name = student_user.full_name if student_user else "Unknown"
+
+        # 1. Close old booking
         if student.booking_id:
             old_booking_res = await self.session.execute(
                 select(Booking).where(Booking.id == student.booking_id)
@@ -261,14 +264,17 @@ class TransferService:
             old_booking = old_booking_res.scalar_one_or_none()
             if old_booking:
                 old_booking.status = BookingStatus.COMPLETED
+                # Ensure check_out_date is set
+                if not old_booking.check_out_date or old_booking.check_out_date <= now:
+                    old_booking.check_out_date = now
 
-        old_bed_res = await self.session.execute(
-            select(Bed).where(Bed.id == student.bed_id)
-        )
+        # 2. Free old bed
+        old_bed_res = await self.session.execute(select(Bed).where(Bed.id == student.bed_id))
         old_bed = old_bed_res.scalar_one_or_none()
         if old_bed:
             old_bed.status = BedStatus.AVAILABLE
 
+        # 3. Close old bed stay
         old_stay_res = await self.session.execute(
             select(BedStay).where(
                 BedStay.student_id == student.id,
@@ -278,12 +284,13 @@ class TransferService:
         old_stay = old_stay_res.scalar_one_or_none()
         if old_stay:
             old_stay.status = BedStayStatus.COMPLETED
-            old_stay.end_date = datetime.now()
+            old_stay.end_date = now
 
-        # 2. Create new booking in target hostel
+        # 4. Create new booking in target hostel (1 month default check-out)
         room_res = await self.session.execute(select(Room).where(Room.id == to_room_id))
         room = room_res.scalar_one()
 
+        new_check_out = now + timedelta(days=30)
         new_booking_number = f"TR-{uuid.uuid4().hex[:10].upper()}"
         new_booking = Booking(
             booking_number=new_booking_number,
@@ -293,36 +300,39 @@ class TransferService:
             bed_id=to_bed_id,
             booking_mode=BookingMode.MONTHLY,
             status=BookingStatus.CHECKED_IN,
-            check_in_date=datetime.now(),
+            check_in_date=now,
+            check_out_date=new_check_out,
             base_rent_amount=room.monthly_rent,
             security_deposit=room.security_deposit,
-            grand_total=room.monthly_rent + room.security_deposit,
-            full_name=student.student_number,
+            grand_total=float(room.monthly_rent) + float(room.security_deposit),
+            full_name=full_name,
         )
         self.session.add(new_booking)
         await self.session.flush()
 
-        # 3. Create new bed stay in target hostel
+        # 5. Create new bed stay in target hostel
         new_stay = BedStay(
             booking_id=str(new_booking.id),
             student_id=str(student.id),
             hostel_id=req.to_hostel_id,
             room_id=to_room_id,
             bed_id=to_bed_id,
-            start_date=datetime.now(),
+            start_date=now,
+            end_date=new_check_out,
             status=BedStayStatus.ACTIVE,
         )
         self.session.add(new_stay)
 
-        # 4. Mark target bed as OCCUPIED
+        # 6. Mark new bed as OCCUPIED
         bed.status = BedStatus.OCCUPIED
 
-        # 5. Update Student profile to point to new hostel, room, bed, and booking
+        # 7. Update student profile to point to new hostel/room/bed/booking
         student.hostel_id = req.to_hostel_id
         student.room_id = to_room_id
         student.bed_id = to_bed_id
         student.booking_id = str(new_booking.id)
 
+        # Update the transfer request with the final room/bed assignments
         req.to_room_id = to_room_id
         req.to_bed_id = to_bed_id
 
@@ -369,14 +379,12 @@ class TransferService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have access to this hostel.",
             )
-
         requests = await self.repository.list_transfers_by_hostel(hostel_id)
         return [await self._to_response(r) for r in requests]
 
     async def _to_response(
         self, req: StudentTransferRequest
     ) -> StudentTransferResponse:
-        # Populate nested names for UI convenience
         resp = StudentTransferResponse.model_validate(req)
 
         from_h = await self.session.get(Hostel, req.from_hostel_id)
@@ -392,7 +400,8 @@ class TransferService:
             resp.to_bed_number = b.bed_number if b else None
 
         student = await self.session.get(Student, req.student_id)
-        if student and student.user:
-            resp.student_name = student.user.full_name
+        if student:
+            user = await self.session.get(User, student.user_id)
+            resp.student_name = user.full_name if user else None
 
         return resp
