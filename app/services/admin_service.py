@@ -603,27 +603,46 @@ class AdminService:
         total_nights: int | None = None
         total_months: int | None = None
 
+        # Check for admin custom price input override
+        custom_rent = getattr(payload, "custom_rent_amount", None)
+        if custom_rent is None:
+            custom_rent = getattr(payload, "base_rent_amount", None)
+
         if mode == BookingMode.HOURLY:
             diff = check_out - check_in
             total_hours = max(1, int(diff.total_seconds() / 3600))
-            if float(room.hourly_rent or 0) <= 0:
-                raise HTTPException(
-                    status_code=400,
-                    detail="This room does not have an hourly rate configured. Please set the hourly rent in Room settings first.",
-                )
-            base_rent = float(room.hourly_rent) * total_hours
+            if custom_rent is not None and custom_rent >= 0:
+                base_rent = float(custom_rent)
+            else:
+                if float(room.hourly_rent or 0) <= 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="This room does not have an hourly rate configured. Please set the hourly rent in Room settings or enter a custom rent amount.",
+                    )
+                base_rent = float(room.hourly_rent) * total_hours
         elif mode == BookingMode.DAILY:
             total_nights = max(1, (check_out - check_in).days)
-            base_rent = float(room.daily_rent or 0) * total_nights
+            if custom_rent is not None and custom_rent >= 0:
+                base_rent = float(custom_rent)
+            else:
+                base_rent = float(room.daily_rent or 0) * total_nights
         else:  # MONTHLY
             s, e = check_in, check_out
             total_months = (e.year - s.year) * 12 + (e.month - s.month)
             if e.day < s.day:
                 total_months -= 1
             total_months = max(1, total_months)
-            base_rent = float(room.monthly_rent or 0) * total_months
+            if custom_rent is not None and custom_rent >= 0:
+                base_rent = float(custom_rent)
+            else:
+                base_rent = float(room.monthly_rent or 0) * total_months
 
-        security_deposit = float(room.security_deposit or 0)
+        custom_sec_dep = getattr(payload, "security_deposit", None)
+        if custom_sec_dep is not None and custom_sec_dep >= 0:
+            security_deposit = float(custom_sec_dep)
+        else:
+            security_deposit = float(room.security_deposit or 0)
+
         grand_total = base_rent + security_deposit
 
         booking = Booking(

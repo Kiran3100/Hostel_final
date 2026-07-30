@@ -29,6 +29,9 @@ class DirectStudentAddRequest(BaseModel):
     check_in_date: str
     check_out_date: str
     booking_mode: str = "monthly"
+    custom_rent_amount: float | None = Field(default=None, ge=0, description="Override calculated base rent if provided by admin")
+    base_rent_amount: float | None = Field(default=None, ge=0, description="Alias for custom_rent_amount")
+    security_deposit: float | None = Field(default=None, ge=0, description="Override room security deposit if provided by admin")
     gender: str | None = Field(default=None, description="M, F, or Other")
     date_of_birth: str | None = Field(default=None, description="YYYY-MM-DD format")
     
