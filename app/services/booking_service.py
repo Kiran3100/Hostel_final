@@ -64,12 +64,36 @@ class BookingService:
         mode = BookingMode(payload.booking_mode)
         total_nights: int | None = None
         total_months: int | None = None
-
         total_hours: int | None = None
 
         if mode == BookingMode.HOURLY:
             diff = payload.check_out_date - payload.check_in_date
             total_hours = max(1, int(diff.total_seconds() / 3600))
+
+            # ── Hourly-mode backend validations ───────────────────────
+            # Fetch room from DB to validate hourly_rent and recalculate price
+            from app.models.room import Room
+            room_res = await self.session.execute(
+                select(Room).where(Room.id == payload.room_id)
+            )
+            room = room_res.scalar_one_or_none()
+            if not room:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Room not found.",
+                )
+            # Block ₹0/hour bookings — admin must set hourly_rent first
+            if float(room.hourly_rent or 0) <= 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="This room does not have an hourly rate configured. Please contact the hostel admin.",
+                )
+            # Recalculate server-side to prevent frontend price tampering
+            server_base = float(room.hourly_rent) * total_hours
+            server_deposit = float(room.security_deposit or 0)
+            payload.base_rent_amount = server_base
+            payload.security_deposit = server_deposit
+
         elif mode == BookingMode.DAILY:
             total_nights = max(1, (payload.check_out_date - payload.check_in_date).days)
         else:
@@ -82,6 +106,9 @@ class BookingService:
         grand_total = payload.grand_total or (
             (payload.base_rent_amount or 0) + (payload.security_deposit or 0)
         )
+        # For hourly, always use the server-calculated total (ignore frontend value)
+        if mode == BookingMode.HOURLY:
+            grand_total = (payload.base_rent_amount or 0) + (payload.security_deposit or 0)
 
         booking = Booking(
             booking_number=booking_number,

@@ -275,9 +275,36 @@ async def get_hostel(slug: str, db: DBSession):
 
 
 @router.get("/hostels/{hostel_id}/rooms", response_model=list[RoomResponse])
-async def get_hostel_rooms(hostel_id: str, db: DBSession):
-    """List rooms for a hostel with live availability."""
-    return await HostelService(db).list_hostel_rooms(hostel_id)
+async def get_hostel_rooms(
+    hostel_id: str,
+    db: DBSession,
+    booking_mode: str | None = None,
+):
+    """List rooms for a hostel with live availability.
+
+    - `booking_mode=hourly` — only returns rooms with `hourly_rent > 0`
+    - `booking_mode=daily`  — only returns rooms with `daily_rent > 0`
+    - `booking_mode=monthly` — only returns rooms with `monthly_rent > 0` (default)
+    """
+    from app.models.room import Room
+    from sqlalchemy import select, and_
+    from app.models.room import RoomStatus
+
+    rooms = await HostelService(db).list_hostel_rooms(hostel_id)
+
+    # Filter out rooms that have no rate configured for the requested mode
+    if booking_mode:
+        mode = booking_mode.lower()
+        filtered = []
+        for room in rooms:
+            if mode == "hourly" and float(room.hourly_rent or 0) <= 0:
+                continue  # Skip ₹0/hour rooms — admin hasn't configured hourly pricing
+            if mode == "daily" and float(room.daily_rent or 0) <= 0:
+                continue
+            filtered.append(room)
+        return filtered
+
+    return rooms
 
 
 @router.get("/hostels/{hostel_id}/reviews")
