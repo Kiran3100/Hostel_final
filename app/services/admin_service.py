@@ -171,6 +171,7 @@ class AdminService:
             floor=payload.floor,
             room_type=payload.room_type.upper().replace("-", "_") if payload.room_type else None,
             total_beds=payload.total_beds,
+            hourly_rent=payload.hourly_rent,      # ← was missing, always defaulted to 0
             daily_rent=payload.daily_rent,
             monthly_rent=payload.monthly_rent,
             security_deposit=payload.security_deposit,
