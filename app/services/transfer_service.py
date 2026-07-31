@@ -288,7 +288,8 @@ class TransferService:
     async def _execute_transfer(
         self, *, req: StudentTransferRequest, to_room_id: str, to_bed_id: str
     ) -> None:
-        now = datetime.now()
+        from datetime import timezone
+        now = datetime.now(timezone.utc)  # ← Always timezone-aware to match DB timestamps
 
         # Validate target bed
         bed_res = await self.session.execute(select(Bed).where(Bed.id == to_bed_id))
@@ -324,9 +325,17 @@ class TransferService:
             old_booking = old_booking_res.scalar_one_or_none()
             if old_booking:
                 old_booking.status = BookingStatus.COMPLETED
-                # Ensure check_out_date is set
-                if not old_booking.check_out_date or old_booking.check_out_date <= now:
+                # Ensure check_out_date is set — coerce naive to aware if needed
+                if old_booking.check_out_date is None:
                     old_booking.check_out_date = now
+                else:
+                    # Make aware for comparison
+                    cot = old_booking.check_out_date
+                    if cot.tzinfo is None:
+                        from datetime import timezone as tz
+                        cot = cot.replace(tzinfo=tz.utc)
+                    if cot <= now:
+                        old_booking.check_out_date = now
 
         # 2. Free old bed
         old_bed_res = await self.session.execute(select(Bed).where(Bed.id == student.bed_id))
@@ -348,7 +357,12 @@ class TransferService:
 
         # 4. Create new booking in target hostel (1 month default check-out)
         room_res = await self.session.execute(select(Room).where(Room.id == to_room_id))
-        room = room_res.scalar_one()
+        room = room_res.scalar_one_or_none()
+        if not room:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Target room not found.",
+            )
 
         new_check_out = now + timedelta(days=30)
         new_booking_number = f"TR-{uuid.uuid4().hex[:10].upper()}"
