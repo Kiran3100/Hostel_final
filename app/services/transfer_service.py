@@ -36,7 +36,8 @@ class TransferService:
                 AdminHostelMapping.admin_id == admin_id
             )
         )
-        return set(str(h) for h in result.scalars().all())
+        # Normalise to lowercase str to avoid UUID-object vs str mismatches
+        return {str(h).lower() for h in result.scalars().all()}
 
     async def _has_pending_dues(self, student_id: str) -> bool:
         """Check if student has pending/failed payments (Payment.status is a plain str)."""
@@ -204,8 +205,12 @@ class TransferService:
         admin_hostels = await self._get_admin_hostels(admin_id)
         action = payload.action.lower().strip()
 
+        # Normalise hostel IDs to lowercase str for safe set membership checks
+        from_h = str(req.from_hostel_id).lower()
+        to_h = str(req.to_hostel_id).lower()
+
         if action == "reject":
-            if req.from_hostel_id not in admin_hostels and req.to_hostel_id not in admin_hostels:
+            if from_h not in admin_hostels and to_h not in admin_hostels:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="You are not authorized to manage this transfer request.",
@@ -221,7 +226,7 @@ class TransferService:
 
             if req.transfer_type == TransferType.INTERNAL:
                 # Internal: same admin owns both hostels — 1-step approval
-                if req.from_hostel_id not in admin_hostels and req.to_hostel_id not in admin_hostels:
+                if from_h not in admin_hostels and to_h not in admin_hostels:
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail="You are not authorized to approve this transfer request.",
@@ -241,7 +246,7 @@ class TransferService:
                 # External: 2-step approval
                 if req.status == TransferStatus.PENDING_OLD_ADMIN:
                     # Step 1: Old hostel admin approves
-                    if req.from_hostel_id not in admin_hostels:
+                    if from_h not in admin_hostels:
                         raise HTTPException(
                             status_code=status.HTTP_403_FORBIDDEN,
                             detail="Only the old hostel admin can perform the initial approval.",
@@ -253,7 +258,7 @@ class TransferService:
 
                 elif req.status == TransferStatus.PENDING_NEW_ADMIN:
                     # Step 2: New hostel admin confirms with room+bed assignment
-                    if req.to_hostel_id not in admin_hostels:
+                    if to_h not in admin_hostels:
                         raise HTTPException(
                             status_code=status.HTTP_403_FORBIDDEN,
                             detail="Only the new hostel admin can complete the final approval.",
