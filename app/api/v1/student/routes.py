@@ -133,6 +133,7 @@ async def get_detailed_student_profile(current_user: StudentUser, db: DBSession)
             "room_number": room.room_number,
             "floor": room.floor,
             "room_type": room.room_type.value if hasattr(room.room_type, "value") else str(room.room_type),
+            "hourly_rent": float(room.hourly_rent or 0),
             "daily_rent": float(room.daily_rent),
             "monthly_rent": float(room.monthly_rent)
         },

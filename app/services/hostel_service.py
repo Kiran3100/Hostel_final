@@ -323,6 +323,7 @@ class HostelService:
                 "floor": room.floor,
                 "room_type": room.room_type,
                 "total_beds": room.total_beds,
+                "hourly_rent": float(room.hourly_rent or 0),
                 "daily_rent": float(room.daily_rent),
                 "monthly_rent": float(room.monthly_rent),
                 "security_deposit": float(room.security_deposit),

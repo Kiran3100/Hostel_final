@@ -908,6 +908,7 @@ class AdminService:
             "room_number": row.room_number,
             "room_type": row.room_type.value if row.room_type and hasattr(row.room_type, 'value') else row.room_type,
             "floor": row.floor,
+            "hourly_rent": to_float(getattr(row, "hourly_rent", 0)),
             "monthly_rent": to_float(row.monthly_rent),
             "daily_rent": to_float(row.daily_rent),
             
