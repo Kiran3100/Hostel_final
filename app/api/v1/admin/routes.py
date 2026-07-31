@@ -289,6 +289,136 @@ async def list_rooms(hostel_id: str, db: DBSession, current_user: AdminUser):
     return await AdminService(db).list_rooms(hostel_id)
 
 
+@router.get("/hostels/{hostel_id}/bed-tracking")
+async def get_hostel_bed_tracking(hostel_id: str, db: DBSession, current_user: AdminUser):
+    """**Bed Tracking Matrix** — Single endpoint to power the visual Bed Tracking UI screen.
+
+    Returns:
+    - Overall metrics: total_beds, occupied, vacant, maintenance, reserved
+    - List of rooms with their child beds, status, and active student details.
+    """
+    from sqlalchemy import select
+    from app.models.hostel import Hostel
+    from app.models.room import Room, Bed, BedStatus
+    from app.models.student import Student, StudentStatus
+    from app.models.user import User
+
+    _check_hostel(current_user, hostel_id)
+
+    # 1. Get Hostel
+    hostel_res = await db.execute(select(Hostel).where(Hostel.id == hostel_id))
+    hostel = hostel_res.scalar_one_or_none()
+    if not hostel:
+        raise HTTPException(status_code=404, detail="Hostel not found.")
+
+    # 2. Get Rooms
+    rooms_res = await db.execute(
+        select(Room)
+        .where(Room.hostel_id == hostel_id)
+        .order_by(Room.floor, Room.room_number)
+    )
+    rooms = rooms_res.scalars().all()
+
+    # 3. Get Beds
+    beds_res = await db.execute(
+        select(Bed)
+        .where(Bed.hostel_id == hostel_id)
+        .order_by(Bed.bed_number)
+    )
+    beds = beds_res.scalars().all()
+
+    # 4. Get Active Students with User info
+    students_res = await db.execute(
+        select(Student, User)
+        .join(User, User.id == Student.user_id)
+        .where(
+            Student.hostel_id == hostel_id,
+            Student.status.in_([StudentStatus.ACTIVE, StudentStatus.ON_LEAVE]),
+        )
+    )
+    # Map bed_id -> student info
+    bed_student_map = {}
+    for student, user in students_res.all():
+        if student.bed_id:
+            bed_student_map[str(student.bed_id)] = {
+                "student_id": str(student.id),
+                "user_id": str(user.id),
+                "full_name": user.full_name,
+                "student_number": student.student_number,
+                "phone": user.phone,
+            }
+
+    # Map room_id -> list of beds
+    room_beds_map = {}
+    total_beds_count = len(beds)
+    occupied_count = 0
+    vacant_count = 0
+    maintenance_count = 0
+    reserved_count = 0
+
+    for bed in beds:
+        status_val = bed.status.value if hasattr(bed.status, "value") else str(bed.status)
+        status_lower = status_val.lower()
+
+        student_info = bed_student_map.get(str(bed.id))
+        
+        # Determine clean status
+        if student_info and status_lower != "maintenance":
+            status_clean = "occupied"
+            occupied_count += 1
+        elif status_lower == "occupied":
+            status_clean = "occupied"
+            occupied_count += 1
+        elif status_lower == "maintenance":
+            status_clean = "maintenance"
+            maintenance_count += 1
+        elif status_lower == "reserved":
+            status_clean = "reserved"
+            reserved_count += 1
+        else:
+            status_clean = "vacant"
+            vacant_count += 1
+
+        bed_item = {
+            "id": str(bed.id),
+            "bed_number": bed.bed_number,
+            "status": status_clean,  # 'vacant' | 'occupied' | 'maintenance' | 'reserved'
+            "student": student_info,
+        }
+
+        r_id = str(bed.room_id)
+        if r_id not in room_beds_map:
+            room_beds_map[r_id] = []
+        room_beds_map[r_id].append(bed_item)
+
+    room_items = []
+    for room in rooms:
+        r_id = str(room.id)
+        room_beds = room_beds_map.get(r_id, [])
+        room_items.append({
+            "id": r_id,
+            "room_number": room.room_number,
+            "floor": room.floor,
+            "room_type": room.room_type.value if hasattr(room.room_type, "value") else str(room.room_type),
+            "total_beds": room.total_beds,
+            "beds": room_beds,
+        })
+
+    return {
+        "hostel_id": str(hostel.id),
+        "hostel_name": hostel.name,
+        "stats": {
+            "total_beds": total_beds_count,
+            "occupied": occupied_count,
+            "vacant": vacant_count,
+            "maintenance": maintenance_count,
+            "reserved": reserved_count,
+        },
+        "rooms": room_items,
+    }
+
+
+
 @router.post("/hostels/{hostel_id}/rooms", response_model=RoomResponse, status_code=201)
 async def create_room(
     hostel_id: str,
