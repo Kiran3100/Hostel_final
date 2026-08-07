@@ -382,6 +382,61 @@ async def bookings(current_user: StudentUser, db: DBSession):
     return await StudentReadService(db).list_bookings(user_id=current_user.id)
 
 
+@router.post("/payments/{payment_id}/verify")
+async def verify_student_payment(
+    payment_id: str,
+    current_user: StudentUser,
+    db: DBSession,
+):
+    """
+    **Verify a student Razorpay payment** (frontend fallback when webhooks aren't configured).
+
+    After the student completes the Razorpay popup, the frontend calls this endpoint
+    to mark the payment as 'captured'. This is essential for local/test environments
+    where Razorpay webhooks cannot reach the backend.
+    """
+    from sqlalchemy import select
+    from app.models.payment import Payment
+    from app.models.student import Student
+    from datetime import UTC, datetime
+
+    # 1. Find the payment
+    result = await db.execute(select(Payment).where(Payment.id == payment_id))
+    payment = result.scalar_one_or_none()
+    if not payment:
+        raise HTTPException(status_code=404, detail="Payment not found.")
+
+    # 2. Verify ownership — payment must belong to this student
+    student_res = await db.execute(
+        select(Student).where(Student.user_id == str(current_user.id))
+    )
+    student = student_res.scalar_one_or_none()
+    if not student or str(payment.student_id) != str(student.id):
+        raise HTTPException(status_code=403, detail="This payment does not belong to you.")
+
+    # 3. Only verify pending/created payments
+    if payment.status not in ("pending", "created"):
+        return {
+            "status": "already_processed",
+            "payment_id": str(payment.id),
+            "current_status": payment.status,
+            "message": f"Payment is already '{payment.status}'. No action needed.",
+        }
+
+    # 4. Mark as captured
+    payment.status = "captured"
+    payment.paid_at = datetime.now(UTC)
+    payment.payment_method = payment.payment_method or "razorpay"
+
+    await db.commit()
+
+    return {
+        "status": "verified",
+        "payment_id": str(payment.id),
+        "amount": float(payment.amount),
+        "message": "Payment verified and marked as captured successfully.",
+    }
+
 # ==================== ATTENDANCE ====================
 
 @router.get("/attendance", response_model=list[AttendanceResponse])
