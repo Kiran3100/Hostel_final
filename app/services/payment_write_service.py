@@ -340,13 +340,15 @@ class PaymentWriteService:
 
         Steps:
         1. Fetch the booking and verify the actor owns it.
-        2. Calculate remaining balance (grand_total - sum of captured payments).
-        3. Ensure there is actually something left to pay.
-        4. Create a Razorpay order for the remaining amount.
-        5. Create a Payment record with type "remaining_balance" in "pending" status.
+        2. Check for existing pending remaining_balance payment (prevent duplicates).
+        3. Calculate remaining balance (grand_total - sum of captured payments).
+        4. Ensure there is actually something left to pay.
+        5. Create a Razorpay order for the remaining amount.
+        6. Create a Payment record with type "remaining_balance" in "pending" status.
         """
         from sqlalchemy import select
         from app.models.booking import Booking
+        from app.models.student import Student
 
         # 1. Fetch booking
         result = await self.session.execute(
@@ -358,7 +360,37 @@ class PaymentWriteService:
         if str(booking.visitor_id) != actor_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No booking access.")
 
-        # 2. Calculate total already paid (only captured payments)
+        # 1b. Resolve student_id for this user
+        student_res = await self.session.execute(
+            select(Student).where(Student.user_id == actor_id)
+        )
+        student = student_res.scalars().first()
+        student_id = str(student.id) if student else None
+
+        # 2. Check for existing pending remaining_balance payment (prevent duplicates)
+        existing_res = await self.session.execute(
+            select(Payment).where(
+                Payment.booking_id == payload.booking_id,
+                Payment.payment_type == "remaining_balance",
+                Payment.status == "pending",
+            ).order_by(Payment.created_at.desc())
+        )
+        existing_payment = existing_res.scalars().first()
+        if existing_payment:
+            # Return existing payment + its Razorpay order instead of creating a duplicate
+            return {
+                "payment": existing_payment,
+                "razorpay_order": {
+                    "id": existing_payment.gateway_order_id,
+                    "amount": int(float(existing_payment.amount) * 100),
+                    "currency": "INR",
+                },
+                "remaining_amount": float(existing_payment.amount),
+                "payment_id": str(existing_payment.id),
+                "reused_existing": True,
+            }
+
+        # 3. Calculate total already paid (only captured payments)
         paid_result = await self.session.execute(
             select(Payment).where(
                 Payment.booking_id == payload.booking_id,
@@ -370,14 +402,14 @@ class PaymentWriteService:
         grand_total = float(booking.grand_total)
         remaining = round(grand_total - total_paid, 2)
 
-        # 3. Validate remaining balance
+        # 4. Validate remaining balance
         if remaining <= 0:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"No remaining balance to pay. Booking is fully paid (₹{grand_total:.2f}).",
             )
 
-        # 4. Fetch Hostel Razorpay Keys
+        # 5. Fetch Hostel Razorpay Keys
         from app.services.payment_config_service import PaymentConfigService
         hostel_keys = await PaymentConfigService(self.session).get_decrypted_keys(str(booking.hostel_id))
         if not hostel_keys:
@@ -391,7 +423,7 @@ class PaymentWriteService:
             key_secret=hostel_keys["key_secret"]
         )
 
-        # 5. Create Razorpay order
+        # 6. Create Razorpay order
         try:
             order = razorpay_client.create_order(
                 amount=remaining,
@@ -408,9 +440,10 @@ class PaymentWriteService:
                 detail=f"Payment gateway error: {str(e)}",
             )
 
-        # 6. Create Payment record
+        # 7. Create Payment record (with student_id for verify endpoint)
         payment = Payment(
             hostel_id=str(booking.hostel_id),
+            student_id=student_id,
             booking_id=str(booking.id),
             amount=remaining,
             payment_type="remaining_balance",
@@ -423,4 +456,9 @@ class PaymentWriteService:
         await self.session.commit()
         await self.session.refresh(payment)
 
-        return {"payment": payment, "razorpay_order": order, "remaining_amount": remaining}
+        return {
+            "payment": payment,
+            "razorpay_order": order,
+            "remaining_amount": remaining,
+            "payment_id": str(payment.id),
+        }
