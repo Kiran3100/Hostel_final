@@ -2268,4 +2268,107 @@ async def download_invoice(
             headers={"Content-Disposition": f'attachment; filename="invoice_{invoice.invoice_number}.pdf"'}
         )
     return invoice
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 🧹 TEMPORARY: Data Cleanup Endpoint (remove after use)
+# ──────────────────────────────────────────────────────────────────────
+@router.post("/cleanup/tenant-data")
+async def cleanup_tenant_data(
+    db: DBSession,
+    current_user: AdminUser,
+    confirm: str = Query(..., description="Must be 'YES_DELETE_ALL_TENANT_DATA' to proceed"),
+):
+    """**⚠️ DANGER: Wipes ALL student/tenant data from the database.**
+
+    Deletes: students, bookings, bed_stays, payments, transfers, complaints,
+    attendance, invoices, and related user accounts (role=student).
+
+    Keeps: hostels, rooms, beds (structure), admin users.
+
+    Resets: all bed statuses → 'available'.
+
+    Pass `confirm=YES_DELETE_ALL_TENANT_DATA` as query param to execute.
+    """
+    if confirm != "YES_DELETE_ALL_TENANT_DATA":
+        raise HTTPException(
+            status_code=400,
+            detail="Safety check failed. Pass confirm=YES_DELETE_ALL_TENANT_DATA to proceed.",
+        )
+
+    from sqlalchemy import text, delete, update
+    from app.models.room import Bed, BedStatus
+    from app.models.student import Student
+    from app.models.booking import Booking, BedStay
+    from app.models.payment import Payment
+    from app.models.transfer import StudentTransferRequest
+    from app.models.user import User
+
+    deleted = {}
+
+    # 1. Delete transfers
+    res = await db.execute(delete(StudentTransferRequest))
+    deleted["transfers"] = res.rowcount
+
+    # 2. Delete payments
+    res = await db.execute(delete(Payment))
+    deleted["payments"] = res.rowcount
+
+    # 3. Delete bed_stays
+    res = await db.execute(delete(BedStay))
+    deleted["bed_stays"] = res.rowcount
+
+    # 4. Delete students
+    res = await db.execute(delete(Student))
+    deleted["students"] = res.rowcount
+
+    # 5. Delete bookings
+    res = await db.execute(delete(Booking))
+    deleted["bookings"] = res.rowcount
+
+    # 6. Try to delete complaints
+    try:
+        from app.models.operations import Complaint
+        res = await db.execute(delete(Complaint))
+        deleted["complaints"] = res.rowcount
+    except Exception:
+        deleted["complaints"] = "skipped"
+
+    # 7. Try to delete attendance
+    try:
+        from app.models.operations import Attendance
+        res = await db.execute(delete(Attendance))
+        deleted["attendance"] = res.rowcount
+    except Exception:
+        deleted["attendance"] = "skipped"
+
+    # 8. Try to delete invoices
+    try:
+        await db.execute(text("DELETE FROM invoices"))
+        deleted["invoices"] = "done"
+    except Exception:
+        deleted["invoices"] = "skipped"
+
+    # 9. Delete student user accounts (role = 'student')
+    try:
+        res = await db.execute(
+            delete(User).where(User.role == "student")
+        )
+        deleted["student_users"] = res.rowcount
+    except Exception:
+        deleted["student_users"] = "skipped"
+
+    # 10. Reset ALL beds to 'available'
+    res = await db.execute(
+        update(Bed).values(status=BedStatus.AVAILABLE)
+    )
+    deleted["beds_reset_to_available"] = res.rowcount
+
+    await db.commit()
+
+    return {
+        "status": "✅ All tenant data wiped successfully",
+        "deleted": deleted,
+        "kept": ["hostels", "rooms", "beds (structure)", "admin users", "admin_hostel_mappings"],
+    }
 
