@@ -186,15 +186,20 @@ async def get_my_roommates(current_user: StudentUser, db: DBSession):
     bed_res = await db.execute(select(Bed).where(Bed.id == student.bed_id))
     bed = bed_res.scalar_one_or_none()
 
-    # 4. Get other roommates assigned to the same room
+    # 4. Get active roommates assigned to the same room currently occupying a bed
+    from datetime import date
+    today = date.today()
+
     roommates_res = await db.execute(
         select(Student, User, Bed)
         .join(User, User.id == Student.user_id)
-        .outerjoin(Bed, Bed.id == Student.bed_id)
+        .join(Bed, Bed.id == Student.bed_id)
         .where(
             Student.room_id == student.room_id,
             Student.id != student.id,
             Student.status.in_([StudentStatus.ACTIVE, StudentStatus.ON_LEAVE]),
+            Bed.status == BedStatus.OCCUPIED,
+            (Student.check_out_date == None) | (Student.check_out_date >= today),
         )
     )
 
