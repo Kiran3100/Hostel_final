@@ -24,7 +24,7 @@ from app.models.operations import Complaint, ComplaintComment
 from app.models.student import Student, StudentStatus
 from app.models.user import User
 from app.models.hostel import Hostel
-from app.models.room import Room, Bed
+from app.models.room import Room, Bed, BedStatus
 from app.models.booking import Booking
 from pydantic import BaseModel as PydanticBaseModel
 from fastapi import APIRouter, Depends, HTTPException, status, Request
