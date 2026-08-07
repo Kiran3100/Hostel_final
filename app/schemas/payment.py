@@ -31,6 +31,8 @@ class RemainingBalancePaymentResponse(BaseModel):
     payment: "PaymentResponse"
     razorpay_order: dict
     remaining_amount: float
+    payment_id: str | None = None
+    razorpay_key_id: str | None = None
 
 
 class BookingPaymentOrderResponse(BaseModel):

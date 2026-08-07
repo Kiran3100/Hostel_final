@@ -377,6 +377,8 @@ class PaymentWriteService:
         )
         existing_payment = existing_res.scalars().first()
         if existing_payment:
+            from app.services.payment_config_service import PaymentConfigService
+            hostel_keys = await PaymentConfigService(self.session).get_decrypted_keys(str(booking.hostel_id))
             # Return existing payment + its Razorpay order instead of creating a duplicate
             return {
                 "payment": existing_payment,
@@ -387,6 +389,7 @@ class PaymentWriteService:
                 },
                 "remaining_amount": float(existing_payment.amount),
                 "payment_id": str(existing_payment.id),
+                "razorpay_key_id": hostel_keys.get("key_id") if hostel_keys else None,
                 "reused_existing": True,
             }
 
@@ -461,4 +464,5 @@ class PaymentWriteService:
             "razorpay_order": order,
             "remaining_amount": remaining,
             "payment_id": str(payment.id),
+            "razorpay_key_id": hostel_keys["key_id"],
         }
