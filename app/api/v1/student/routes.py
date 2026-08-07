@@ -355,8 +355,13 @@ async def payments(current_user: StudentUser, db: DBSession):
     return await PaymentService(db).list_student_payments(user_id=current_user.id)
 
 
-from app.schemas.payment import RemainingBalancePaymentRequest, RemainingBalancePaymentResponse
+from app.schemas.payment import (
+    RemainingBalancePaymentRequest,
+    RemainingBalancePaymentResponse,
+    VerifyStudentPaymentRequest,
+)
 from app.services.payment_write_service import PaymentWriteService
+
 
 @router.post("/payments/pay-remaining", response_model=RemainingBalancePaymentResponse)
 async def pay_remaining_balance(
@@ -382,39 +387,63 @@ async def bookings(current_user: StudentUser, db: DBSession):
     return await StudentReadService(db).list_bookings(user_id=current_user.id)
 
 
+@router.post("/payments/verify")
 @router.post("/payments/{payment_id}/verify")
 async def verify_student_payment(
-    payment_id: str,
     current_user: StudentUser,
     db: DBSession,
+    payment_id: str | None = None,
+    payload: VerifyStudentPaymentRequest | None = None,
 ):
     """
     **Verify a student Razorpay payment** (frontend fallback when webhooks aren't configured).
 
-    After the student completes the Razorpay popup, the frontend calls this endpoint
-    to mark the payment as 'captured'. This is essential for local/test environments
-    where Razorpay webhooks cannot reach the backend.
+    Accepts:
+    - Path param: `POST /api/v1/student/payments/{payment_id}/verify`
+    - Body param: `POST /api/v1/student/payments/verify` with `{ "payment_id": "...", "razorpay_payment_id": "..." }`
     """
     from sqlalchemy import select
     from app.models.payment import Payment
     from app.models.student import Student
     from datetime import UTC, datetime
 
-    # 1. Find the payment
-    result = await db.execute(select(Payment).where(Payment.id == payment_id))
-    payment = result.scalar_one_or_none()
-    if not payment:
-        raise HTTPException(status_code=404, detail="Payment not found.")
+    target_id = payment_id or (payload.payment_id if payload else None)
 
-    # 2. Verify ownership — payment must belong to this student
+    # If target_id is still missing, attempt to find latest pending payment for this student
     student_res = await db.execute(
         select(Student).where(Student.user_id == str(current_user.id))
     )
     student = student_res.scalar_one_or_none()
-    if not student or str(payment.student_id) != str(student.id):
+    if not student:
+        raise HTTPException(status_code=404, detail="Student record not found.")
+
+    if not target_id:
+        # Find latest pending payment for this student
+        pending_res = await db.execute(
+            select(Payment)
+            .where(Payment.student_id == str(student.id), Payment.status.in_(["pending", "created"]))
+            .order_by(Payment.created_at.desc())
+        )
+        payment = pending_res.scalars().first()
+    else:
+        result = await db.execute(select(Payment).where(Payment.id == target_id))
+        payment = result.scalar_one_or_none()
+
+    if not payment:
+        raise HTTPException(status_code=404, detail="Payment not found.")
+
+    # Verify ownership
+    if str(payment.student_id) != str(student.id):
         raise HTTPException(status_code=403, detail="This payment does not belong to you.")
 
-    # 3. Only verify pending/created payments
+    # Store gateway details if provided
+    if payload:
+        if payload.razorpay_payment_id:
+            payment.gateway_payment_id = payload.razorpay_payment_id
+        if payload.razorpay_signature:
+            payment.gateway_signature = payload.razorpay_signature
+
+    # Only process pending/created
     if payment.status not in ("pending", "created"):
         return {
             "status": "already_processed",
@@ -423,7 +452,7 @@ async def verify_student_payment(
             "message": f"Payment is already '{payment.status}'. No action needed.",
         }
 
-    # 4. Mark as captured
+    # Mark as captured
     payment.status = "captured"
     payment.paid_at = datetime.now(UTC)
     payment.payment_method = payment.payment_method or "razorpay"

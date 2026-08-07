@@ -19,6 +19,13 @@ class RemainingBalancePaymentRequest(BaseModel):
     payment_method: str = Field(default="razorpay", min_length=2, max_length=50)
 
 
+class VerifyStudentPaymentRequest(BaseModel):
+    payment_id: str | None = Field(default=None, description="Optional payment ID if not in path")
+    razorpay_payment_id: str | None = Field(default=None, description="Razorpay payment ID from handler")
+    razorpay_signature: str | None = Field(default=None, description="Razorpay signature from handler")
+    razorpay_order_id: str | None = Field(default=None, description="Razorpay order ID from handler")
+
+
 class RemainingBalancePaymentResponse(BaseModel):
     """Response after initiating a remaining balance payment via Razorpay."""
     payment: "PaymentResponse"
