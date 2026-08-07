@@ -262,14 +262,14 @@ class PaymentWriteService:
         if str(booking.visitor_id) != actor_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No booking access.")
 
-        # Find the pending payment for this booking
+        # Find the latest pending payment for this booking
         result = await self.session.execute(
             select(Payment).where(
                 Payment.booking_id == booking_id,
                 Payment.status == "pending",
             ).order_by(Payment.created_at.desc())
         )
-        payment = result.scalar_one_or_none()
+        payment = result.scalars().first()
         if payment:
             payment.status = "captured"
             payment.paid_at = datetime.now(UTC)
