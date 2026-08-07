@@ -412,19 +412,18 @@ class PaymentWriteService:
                 detail=f"No remaining balance to pay. Booking is fully paid (₹{grand_total:.2f}).",
             )
 
-        # 5. Fetch Hostel Razorpay Keys
+        # 5. Fetch Hostel Razorpay Keys (or fallback to system default keys)
         from app.services.payment_config_service import PaymentConfigService
         hostel_keys = await PaymentConfigService(self.session).get_decrypted_keys(str(booking.hostel_id))
-        if not hostel_keys:
-            raise HTTPException(
-                status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail="This hostel has not configured online payments yet. Please contact the hostel admin."
+        if hostel_keys and hostel_keys.get("key_id"):
+            razorpay_client = RazorpayClient(
+                key_id=hostel_keys["key_id"],
+                key_secret=hostel_keys["key_secret"]
             )
-            
-        razorpay_client = RazorpayClient(
-            key_id=hostel_keys["key_id"],
-            key_secret=hostel_keys["key_secret"]
-        )
+            key_id_used = hostel_keys["key_id"]
+        else:
+            razorpay_client = RazorpayClient()
+            key_id_used = razorpay_client.key_id
 
         # 6. Create Razorpay order
         try:
@@ -464,5 +463,5 @@ class PaymentWriteService:
             "razorpay_order": order,
             "remaining_amount": remaining,
             "payment_id": str(payment.id),
-            "razorpay_key_id": hostel_keys["key_id"],
+            "razorpay_key_id": key_id_used,
         }
