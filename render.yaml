@@ -23,6 +23,28 @@ services:
         value: "False"
       - key: APP_ENV
         value: "production"
+      - key: EMAIL_PROVIDER
+        value: "brevo"
+      - key: BREVO_SENDER_EMAIL
+        value: "hemantpawade04@gmail.com"
+      - key: BREVO_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+      - key: TWO_FACTOR_API_KEY
+        sync: false
 
 databases:
   - name: hostel-db
