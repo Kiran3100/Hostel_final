@@ -807,11 +807,11 @@ class LeviticaNestoraSeeder:
 
     async def run(self) -> None:
         print("\n" + "="*60)
-        print("  🌱  Levitica Nestora — Full Seed Data Population")
+        print("  🌱  Levitica Nestora — Core Admin Seed Data Population")
         print("="*60 + "\n")
 
         # ── Users ──────────────────────────────────────────────────────
-        print("👤 Creating users...\n")
+        print("👤 Creating core admin users...\n")
 
         await self.create_user(
             "superadmin@leviticanestora.com", "+91-9000000001",
@@ -827,30 +827,11 @@ class LeviticaNestoraSeeder:
             admin_ids.append(aid)
 
         supervisor_ids = []
-        for i in range(4):
-            sid = await self.create_user(
-                f"supervisor{i+1}@leviticanestora.com", f"+91-900000020{i}",
-                f"Supervisor {i+1}", UserRole.SUPERVISOR,
-            )
-            supervisor_ids.append(sid)
-
-        visitor_ids = []
-        for name, prefix in VISITOR_NAMES:
-            vid = await self.create_user(
-                f"{prefix}@gmail.com", f"+91-91{len(visitor_ids):08d}",
-                name, UserRole.VISITOR,
-            )
-            visitor_ids.append(vid)
-
-        student_user_ids = []
-        for i, (name, prefix) in enumerate(STUDENT_NAMES):
-            emp_code = EMPLOYEE_DATA[i][0] if i < len(EMPLOYEE_DATA) else f"LEV{i+1:03d}"
-            emp_phone = f"+91-8{(i + 1):09d}"
-            sid = await self.create_user(
-                f"{prefix}@levitica.in", emp_phone,
-                name, UserRole.STUDENT,
-            )
-            student_user_ids.append(sid)
+        sid = await self.create_user(
+            "supervisor1@leviticanestora.com", "+91-9000000200",
+            "Supervisor 1", UserRole.SUPERVISOR,
+        )
+        supervisor_ids.append(sid)
 
         # ── Hostels ────────────────────────────────────────────────────
         print("\n🏠 Creating hostels, rooms, beds...\n")
@@ -858,203 +839,33 @@ class LeviticaNestoraSeeder:
         hostel_ids = []
         for i, cfg in enumerate(HOSTELS_CONFIG):
             admin_id = admin_ids[i % len(admin_ids)]
-            supervisor_id = supervisor_ids[i % len(supervisor_ids)]
+            supervisor_id = supervisor_ids[0]
             hid = await self.create_hostel(cfg, admin_id, supervisor_id)
             hostel_ids.append(hid)
             await self.create_rooms_and_beds(hid, cfg["rooms"])
             print(f"    → {len(cfg['rooms'])} rooms created")
 
-        # ── Bookings & Students ────────────────────────────────────────
-        print("\n📅 Creating bookings and students...\n")
-
-        beds_by_hostel: dict[str, list[str]] = {}
-        for bid, bdata in self.beds.items():
-            hid = bdata["hostel_id"]
-            beds_by_hostel.setdefault(hid, []).append(bid)
-
-        rooms_by_hostel: dict[str, list[str]] = {}
-        for rid, rdata in self.rooms.items():
-            hid = rdata["hostel_id"]
-            rooms_by_hostel.setdefault(hid, []).append(rid)
-
-        student_idx = 0
-        booking_statuses = [
-            BookingStatus.CHECKED_IN,
-            BookingStatus.CHECKED_IN,
-            BookingStatus.APPROVED,
-            BookingStatus.PENDING_APPROVAL,
-            BookingStatus.PAYMENT_PENDING,
-            BookingStatus.REJECTED,
-            BookingStatus.CANCELLED,
-        ]
-
-        for i, visitor_id in enumerate(visitor_ids):
-            hid = hostel_ids[i % len(hostel_ids)]
-            hostel_beds = beds_by_hostel.get(hid, [])
-            hostel_rooms = rooms_by_hostel.get(hid, [])
-            if not hostel_beds or not hostel_rooms:
-                continue
-            bed_id = hostel_beds[i % len(hostel_beds)]
-            room_id = self.beds[bed_id]["room_id"]
-            status = booking_statuses[i % len(booking_statuses)]
-            admin_id = admin_ids[i % len(admin_ids)]
-            name = VISITOR_NAMES[i][0]
-
-            booking = await self.create_booking(
-                visitor_id=visitor_id, hostel_id=hid,
-                room_id=room_id,
-                bed_id=bed_id if status not in (BookingStatus.PAYMENT_PENDING, BookingStatus.PENDING_APPROVAL, BookingStatus.REJECTED, BookingStatus.CANCELLED) else None,
-                status=status,
-                mode=BookingMode.MONTHLY if i % 2 == 0 else BookingMode.DAILY,
-                days=30 if i % 2 == 0 else 14,
-                full_name=name,
-                approved_by=admin_id if status in (BookingStatus.APPROVED, BookingStatus.CHECKED_IN) else None,
-            )
-            print(f"  ✓ Booking {booking.booking_number} [{status.value}] — {name}")
-
-            if status in (BookingStatus.APPROVED, BookingStatus.CHECKED_IN):
-                await self.create_payment(
-                    hostel_id=hid, booking_id=booking.id,
-                    student_id=None, amount=booking.booking_advance,
-                    status="captured",
-                )
-
-        print("\n🎓 Creating student records...\n")
-        for i, student_user_id in enumerate(student_user_ids):
-            hid = hostel_ids[i % len(hostel_ids)]
-            hostel_beds = beds_by_hostel.get(hid, [])
-            hostel_rooms = rooms_by_hostel.get(hid, [])
-            if not hostel_beds or not hostel_rooms:
-                continue
-
-            bed_idx = (i + len(visitor_ids)) % len(hostel_beds) if hostel_beds else 0
-            bed_id = hostel_beds[bed_idx] if hostel_beds else None
-            if not bed_id:
-                continue
-            room_id = self.beds[bed_id]["room_id"]
-            admin_id = admin_ids[i % len(admin_ids)]
-            name = STUDENT_NAMES[i][0]
-            emp_code = EMPLOYEE_DATA[i][0] if i < len(EMPLOYEE_DATA) else None
-
-            booking = await self.create_booking(
-                visitor_id=student_user_id, hostel_id=hid,
-                room_id=room_id, bed_id=bed_id,
-                status=BookingStatus.CHECKED_IN,
-                mode=BookingMode.MONTHLY, days=30,
-                full_name=name, approved_by=admin_id,
-            )
-
-            student_id = await self.create_student(
-                user_id=student_user_id, hostel_id=hid,
-                room_id=room_id, bed_id=bed_id,
-                booking_id=booking.id, idx=student_idx + 1,
-                employee_code=emp_code,
-            )
-            student_idx += 1
-
-            await self.create_payment(
-                hostel_id=hid, booking_id=booking.id,
-                student_id=student_id, amount=6000.0,
-                ptype="monthly_rent", status="captured",
-            )
-            print(f"  ✓ Student {emp_code or 'SE'+str(student_idx).zfill(4)} — {name}")
-
-        # ── Mess Menus ─────────────────────────────────────────────────
-        print("\n🍽️  Creating mess menus...\n")
+        # ── Mess Menus & Subscriptions ──────────────────────────────────
         for i, hid in enumerate(hostel_ids):
             await self.create_mess_menu(hid, admin_ids[i % len(admin_ids)])
-            print(f"  ✓ Mess menu for hostel {i+1}")
-
-        # ── Notices ────────────────────────────────────────────────────
-        print("\n📢 Creating notices...\n")
-        for i, hid in enumerate(hostel_ids):
-            await self.create_notices(hid, supervisor_ids[i % len(supervisor_ids)])
-        print(f"  ✓ {len(NOTICE_DATA)} notices per hostel")
-
-        # ── Complaints ─────────────────────────────────────────────────
-        print("\n💬 Creating complaints...\n")
-        student_ids_list = list(self.students.values())
-        if student_ids_list:
-            for i, hid in enumerate(hostel_ids):
-                sup_id = supervisor_ids[i % len(supervisor_ids)]
-                await self.create_complaints(hid, student_ids_list, sup_id)
-            print(f"  ✓ {len(COMPLAINT_DATA)} complaints per hostel")
-
-        # ── Attendance ─────────────────────────────────────────────────
-        print("\n📋 Creating attendance records (14 days)...\n")
-        if student_ids_list:
-            for i, hid in enumerate(hostel_ids):
-                sup_id = supervisor_ids[i % len(supervisor_ids)]
-                hostel_student_ids = [
-                    sid for uid, sid in self.students.items()
-                    if any(
-                        b.hostel_id == hid and str(b.visitor_id) == str(uid)
-                        for b in self.bookings
-                    )
-                ]
-                if not hostel_student_ids:
-                    hostel_student_ids = student_ids_list[:5]
-                await self.create_attendance(hid, hostel_student_ids[:5], sup_id)
-            print(f"  ✓ 14 days × up to 5 students per hostel")
-
-        # ── Maintenance ────────────────────────────────────────────────
-        print("\n🔧 Creating maintenance requests...\n")
-        for i, hid in enumerate(hostel_ids):
-            room_ids = rooms_by_hostel.get(hid, [])
-            sup_id = supervisor_ids[i % len(supervisor_ids)]
-            adm_id = admin_ids[i % len(admin_ids)]
-            await self.create_maintenance(hid, room_ids, sup_id, adm_id)
-        print(f"  ✓ {len(MAINTENANCE_DATA)} maintenance requests per hostel")
-
-        # ── Reviews ────────────────────────────────────────────────────
-        print("\n⭐ Creating reviews...\n")
-        for i, hid in enumerate(hostel_ids):
-            await self.create_reviews(hid, visitor_ids)
-        print(f"  ✓ Reviews per hostel")
-
-        # ── Subscriptions ──────────────────────────────────────────────
-        print("\n💳 Creating subscriptions...\n")
-        for hid in hostel_ids:
             await self.create_subscription(hid)
-        print(f"  ✓ 1 active subscription per hostel")
-
-        # ── Inquiries ──────────────────────────────────────────────────
-        print("\n📩 Creating inquiries...\n")
-        for hid in hostel_ids:
-            await self.create_inquiry(hid)
-        print(f"  ✓ Inquiries per hostel")
 
         # ── Commit ─────────────────────────────────────────────────────
         print("\n💾 Committing to database...\n")
         await self.session.commit()
 
         print("="*60)
-        print("  ✅  Seed complete!")
+        print("  ✅  Core seed complete!")
         print("="*60)
         print(f"""
   📊 Summary
-  ──────────────────────────────────────
-  Users          : {len(self.users)}
-    Super Admin  : 1
-    Hostel Admin : 2
-    Supervisors  : 4
-    Visitors     : {len(VISITOR_NAMES)}
-    Students     : {len(STUDENT_NAMES)}
-  Hostels        : {len(hostel_ids)}
-  Rooms          : {len(self.rooms)}
-  Beds           : {len(self.beds)}
-  Bookings       : {len(self.bookings)}
-  Students       : {len(self.students)}
-
-  🔑 Login credentials (all use password: Test@1234)
   ──────────────────────────────────────
   Super Admin  : superadmin@leviticanestora.com
   Admin 1      : admin1@leviticanestora.com
   Admin 2      : admin2@leviticanestora.com
   Supervisor 1 : supervisor1@leviticanestora.com
-  Visitor 1    : arun.kapoor@gmail.com
-  Student 1    : abhilash.gurrampally.lev029@levitica.in
-  Student 22   : hemant.pawade.lev044@levitica.in
+  
+  🔑 Password for all: Test@1234
   ──────────────────────────────────────
 """)
 
