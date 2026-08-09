@@ -63,9 +63,18 @@ All accounts use password: **`Test@1234`**
 > 63 student accounts from Levitica employee register — pattern: `firstname.lastname.levxxx@levitica.in`
 
 **How to authenticate:**
-1. Call `POST /api/v1/auth/login` with email + password
+1. Call `POST /api/v1/auth/login` with `email_or_phone` + `password`
 2. Copy the `access_token` from the response
 3. Click **Authorize 🔒** (top right) → paste `Bearer <token>`
+
+---
+
+## ⚡ Key Feature Endpoints
+
+- **🛏️ Bed Tracking Dashboard:** `GET /api/v1/admin/hostels/{hostel_id}/bed-tracking`
+- **💳 Student Payment Verify:** `POST /api/v1/student/payments/{payment_id}/verify` or `POST /api/v1/student/payments/verify`
+- **💰 Pay Remaining Balance:** `POST /api/v1/student/payments/pay-remaining`
+- **🧹 Data Cleanup:** `POST /api/v1/admin/cleanup/tenant-data?confirm=YES_DELETE_ALL_TENANT_DATA`
 
 ---
 
