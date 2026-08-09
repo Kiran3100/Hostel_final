@@ -425,6 +425,12 @@ class LeviticaNestoraSeeder:
         return user.id
 
     async def create_hostel(self, cfg: dict, admin_id: str, supervisor_id: str) -> str:
+        existing = await self.session.execute(select(Hostel).where(Hostel.slug == cfg["slug"]))
+        hostel_obj = existing.scalar_one_or_none()
+        if hostel_obj:
+            self.hostels[cfg["name"]] = hostel_obj.id
+            return hostel_obj.id
+
         hostel = Hostel(
             id=self._uid(),
             name=cfg["name"], slug=cfg["slug"],
@@ -479,17 +485,25 @@ class LeviticaNestoraSeeder:
 
     async def create_rooms_and_beds(self, hostel_id: str, rooms_cfg: list) -> None:
         for r in rooms_cfg:
-            room = Room(
-                id=self._uid(), hostel_id=hostel_id,
-                room_number=r["number"], floor=r["floor"],
-                room_type=r["type"],
-                total_beds=r["beds"],
-                daily_rent=r["daily"], monthly_rent=r["monthly"],
-                security_deposit=r["deposit"],
-                dimensions=r.get("dim"), is_active=True,
+            existing_room_res = await self.session.execute(
+                select(Room).where(Room.hostel_id == hostel_id, Room.room_number == r["number"])
             )
-            self.session.add(room)
-            await self._flush()
+            existing_room = existing_room_res.scalar_one_or_none()
+            if existing_room:
+                room = existing_room
+            else:
+                room = Room(
+                    id=self._uid(), hostel_id=hostel_id,
+                    room_number=r["number"], floor=r["floor"],
+                    room_type=r["type"],
+                    total_beds=r["beds"],
+                    daily_rent=r["daily"], monthly_rent=r["monthly"],
+                    security_deposit=r["deposit"],
+                    dimensions=r.get("dim"), is_active=True,
+                )
+                self.session.add(room)
+                await self._flush()
+
             self.rooms[room.id] = {"hostel_id": hostel_id, "room_id": room.id}
 
             for b in range(1, r["beds"] + 1):
@@ -587,6 +601,12 @@ class LeviticaNestoraSeeder:
                              room_id: str, bed_id: str,
                              booking_id: str, idx: int,
                              employee_code: str | None = None) -> str:
+        existing_student = await self.session.execute(select(Student).where(Student.user_id == user_id))
+        s_obj = existing_student.scalar_one_or_none()
+        if s_obj:
+            self.students[user_id] = s_obj.id
+            return s_obj.id
+
         if employee_code:
             student_number = f"{employee_code}-{idx:02d}"
         else:
