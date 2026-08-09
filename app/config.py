@@ -105,9 +105,12 @@ class Settings(BaseSettings):
     @field_validator("database_url", mode="after")
     @classmethod
     def validate_database_url(cls, value: str) -> str:
-        """Ensure database URL has asyncpg driver"""
-        if value and "postgresql://" in value and "+asyncpg" not in value:
-            value = value.replace("postgresql://", "postgresql+asyncpg://")
+        """Ensure database URL has asyncpg driver and handles Render's postgres:// scheme"""
+        if value:
+            if value.startswith("postgres://"):
+                value = value.replace("postgres://", "postgresql+asyncpg://", 1)
+            elif value.startswith("postgresql://") and "+asyncpg" not in value:
+                value = value.replace("postgresql://", "postgresql+asyncpg://", 1)
         return value
     
     def get_sync_database_url(self) -> str:
@@ -115,6 +118,8 @@ class Settings(BaseSettings):
         url = self.database_url
         if "+asyncpg" in url:
             url = url.replace("+asyncpg", "")
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql://", 1)
         return url
 
 
