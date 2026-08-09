@@ -931,9 +931,7 @@ async def root():
           {/* SIDEBAR NAVIGATION */}
           <aside class="w-64 glass border-r border-white/5 flex flex-col fixed inset-y-0 left-0 z-30">
             <div class="h-20 flex items-center gap-3 px-6 border-b border-white/5">
-              <div class="w-9 h-9 bg-gradient-to-tr from-orange-600 to-amber-500 rounded-xl flex items-center justify-center font-bold text-lg text-white shadow-lg shadow-orange-500/20">
-                SE
-              </div>
+              <img src="https://leviticatechnologies.com/img/leviticalogo-removebg.png" alt="Levitica Logo" class="w-10 h-10 object-contain drop-shadow-md" />
               <div>
                 <h1 class="font-extrabold text-white leading-tight tracking-tight">Levitica Nestora</h1>
                 <span class="text-[10px] uppercase font-bold tracking-widest text-slate-400">DevPortal V1.0</span>
