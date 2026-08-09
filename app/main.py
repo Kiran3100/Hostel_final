@@ -46,21 +46,18 @@ _DESCRIPTION = """
 
 ---
 
-## 🔑 Quick Start — Test Credentials
+## 🔑 Quick Start — Core Administrative Accounts
 
-All accounts use password: **`Test@1234`**
+All core accounts use password: **`Test@1234`**
 
 | Role | Email | Access |
 |------|-------|--------|
 | 🛡️ Super Admin | `superadmin@leviticanestora.com` | Approve hostels, create admins, manage subscriptions, full platform |
-| 🏢 Hostel Admin 1 | `admin1@leviticanestora.com` | Rooms, beds, bookings, students, complaints, attendance — Hyderabad + Pune |
-| 🏢 Hostel Admin 2 | `admin2@leviticanestora.com` | Rooms, beds, bookings, students, complaints, attendance — Bangalore + Mumbai |
-| 👷 Supervisor 1 | `supervisor1@leviticanestora.com` | Attendance, complaints, maintenance, notices, mess menu — Green Valley (Hyderabad) |
-| 👷 Supervisor 2 | `supervisor2@leviticanestora.com` | Attendance, complaints, maintenance, notices, mess menu — Pearl Girls (Bangalore) |
-| 🧑‍🎓 Student (Hemant) | `hemant.pawade.lev044@levitica.in` | Own profile, bookings, payments, attendance, complaints, notices |
-| 🙋 Visitor | `arun.kapoor@gmail.com` | Browse hostels, create bookings, pay, write reviews, manage favorites |
+| 🏢 Hostel Admin 1 | `admin1@leviticanestora.com` | Rooms, beds, bookings, students, complaints, attendance management |
+| 🏢 Hostel Admin 2 | `admin2@leviticanestora.com` | Rooms, beds, bookings, students, complaints, attendance management |
+| 👷 Supervisor 1 | `supervisor1@leviticanestora.com` | Daily attendance, complaints, maintenance, notices, mess menu |
 
-> 63 student accounts from Levitica employee register — pattern: `firstname.lastname.levxxx@levitica.in`
+> **Note:** All hostels, rooms, beds, and tenant data are managed and created manually by your team via the platform UI.
 
 **How to authenticate:**
 1. Call `POST /api/v1/auth/login` with `email_or_phone` + `password`
