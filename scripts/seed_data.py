@@ -810,55 +810,41 @@ class LeviticaNestoraSeeder:
 
     async def run(self) -> None:
         print("\n" + "="*60)
-        print("  🌱  Levitica Nestora — Core Admin Seed Data Population")
+        print("  🌱  Levitica Nestora — Core Admin Accounts Only")
         print("="*60 + "\n")
 
-        # ── Users ──────────────────────────────────────────────────────
-        print("👤 Creating core admin users...\n")
+        print("👤 Creating 4 core admin users...\n")
 
+        # 1. Super Admin
         await self.create_user(
             "superadmin@leviticanestora.com", "+91-9000000001",
             "Super Admin", UserRole.SUPER_ADMIN,
         )
 
-        admin_ids = []
-        for i in range(2):
-            aid = await self.create_user(
-                f"admin{i+1}@leviticanestora.com", f"+91-900000010{i}",
-                f"Hostel Admin {i+1}", UserRole.HOSTEL_ADMIN,
-            )
-            admin_ids.append(aid)
+        # 2. Hostel Admin 1
+        await self.create_user(
+            "admin1@leviticanestora.com", "+91-9000000100",
+            "Hostel Admin 1", UserRole.HOSTEL_ADMIN,
+        )
 
-        supervisor_ids = []
-        sid = await self.create_user(
+        # 3. Hostel Admin 2
+        await self.create_user(
+            "admin2@leviticanestora.com", "+91-9000000101",
+            "Hostel Admin 2", UserRole.HOSTEL_ADMIN,
+        )
+
+        # 4. Supervisor 1
+        await self.create_user(
             "supervisor1@leviticanestora.com", "+91-9000000200",
             "Supervisor 1", UserRole.SUPERVISOR,
         )
-        supervisor_ids.append(sid)
-
-        # ── Hostels ────────────────────────────────────────────────────
-        print("\n🏠 Creating hostels, rooms, beds...\n")
-
-        hostel_ids = []
-        for i, cfg in enumerate(HOSTELS_CONFIG):
-            admin_id = admin_ids[i % len(admin_ids)]
-            supervisor_id = supervisor_ids[0]
-            hid = await self.create_hostel(cfg, admin_id, supervisor_id)
-            hostel_ids.append(hid)
-            await self.create_rooms_and_beds(hid, cfg["rooms"])
-            print(f"    → {len(cfg['rooms'])} rooms created")
-
-        # ── Mess Menus & Subscriptions ──────────────────────────────────
-        for i, hid in enumerate(hostel_ids):
-            await self.create_mess_menu(hid, admin_ids[i % len(admin_ids)])
-            await self.create_subscription(hid)
 
         # ── Commit ─────────────────────────────────────────────────────
-        print("\n💾 Committing to database...\n")
+        print("\n💾 Committing users to database...\n")
         await self.session.commit()
 
         print("="*60)
-        print("  ✅  Core seed complete!")
+        print("  ✅  Core Users Seed Complete (0 sample hostels/rooms)!")
         print("="*60)
         print(f"""
   📊 Summary
