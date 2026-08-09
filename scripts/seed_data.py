@@ -508,16 +508,19 @@ class LeviticaNestoraSeeder:
 
             for b in range(1, r["beds"] + 1):
                 bed_number = f"B{b}"
-                # Check if bed already exists to avoid duplicates
-                existing_bed = None
-                for existing in self.beds.values():
-                    if existing.get("room_id") == room.id and existing.get("bed_number") == bed_number:
-                        existing_bed = existing
-                        break
-                
+                existing_bed_res = await self.session.execute(
+                    select(Bed).where(Bed.room_id == room.id, Bed.bed_number == bed_number)
+                )
+                existing_bed = existing_bed_res.scalar_one_or_none()
                 if existing_bed:
+                    self.beds[existing_bed.id] = {
+                        "hostel_id": hostel_id,
+                        "room_id": room.id,
+                        "bed_id": existing_bed.id,
+                        "bed_number": bed_number,
+                    }
                     continue
-                    
+
                 bed = Bed(
                     id=self._uid(), hostel_id=hostel_id,
                     room_id=room.id,
