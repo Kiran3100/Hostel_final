@@ -407,6 +407,12 @@ class LeviticaNestoraSeeder:
 
     async def create_user(self, email: str, phone: str, full_name: str,
                           role: UserRole, password: str = "Test@1234") -> str:
+        existing = await self.session.execute(select(User).where(User.email == email))
+        user_obj = existing.scalar_one_or_none()
+        if user_obj:
+            self.users[email] = user_obj.id
+            return user_obj.id
+
         user = User(
             id=self._uid(), email=email, phone=phone, full_name=full_name,
             password_hash=hash_password(password), role=role,

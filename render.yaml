@@ -23,6 +23,8 @@ services:
         value: "False"
       - key: APP_ENV
         value: "production"
+      - key: SEED_DATA
+        value: "true"
       - key: EMAIL_PROVIDER
         value: "brevo"
       - key: BREVO_SENDER_EMAIL
