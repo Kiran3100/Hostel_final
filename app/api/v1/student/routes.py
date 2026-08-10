@@ -407,38 +407,60 @@ async def verify_student_payment(
     - Path param: `POST /api/v1/student/payments/{payment_id}/verify`
     - Body param: `POST /api/v1/student/payments/verify` with `{ "payment_id": "...", "razorpay_payment_id": "..." }`
     """
-    from sqlalchemy import select
+    from sqlalchemy import select, or_
+    from sqlalchemy.orm import joinedload
     from app.models.payment import Payment
     from app.models.student import Student
+    from app.models.booking import Booking
     from datetime import UTC, datetime
 
     target_id = payment_id or (payload.payment_id if payload else None)
 
-    # If target_id is still missing, attempt to find latest pending payment for this student
+    # Get student record for user (if any)
     student_res = await db.execute(
         select(Student).where(Student.user_id == str(current_user.id))
     )
     student = student_res.scalar_one_or_none()
-    if not student:
-        raise HTTPException(status_code=404, detail="Student record not found.")
 
     if not target_id:
-        # Find latest pending payment for this student
+        # Find latest pending payment for this user
+        filters = []
+        if student:
+            filters.append(Payment.student_id == str(student.id))
+        
+        booking_ids_subq = (
+            select(Booking.id).where(Booking.visitor_id == str(current_user.id))
+        ).scalar_subquery()
+        filters.append(Payment.booking_id.in_(booking_ids_subq))
+
         pending_res = await db.execute(
             select(Payment)
-            .where(Payment.student_id == str(student.id), Payment.status.in_(["pending", "created"]))
+            .options(joinedload(Payment.booking))
+            .where(or_(*filters), Payment.status.in_(["pending", "created"]))
             .order_by(Payment.created_at.desc())
         )
         payment = pending_res.scalars().first()
     else:
-        result = await db.execute(select(Payment).where(Payment.id == target_id))
+        result = await db.execute(
+            select(Payment)
+            .options(joinedload(Payment.booking))
+            .where(Payment.id == target_id)
+        )
         payment = result.scalar_one_or_none()
 
     if not payment:
         raise HTTPException(status_code=404, detail="Payment not found.")
 
-    # Verify ownership
-    if str(payment.student_id) != str(student.id):
+    # Verify ownership (matches student_id OR booking visitor_id)
+    is_owner = False
+    if student and payment.student_id and str(payment.student_id) == str(student.id):
+        is_owner = True
+    elif payment.booking and str(payment.booking.visitor_id) == str(current_user.id):
+        is_owner = True
+    elif not payment.student_id and not payment.booking_id:
+        is_owner = True
+
+    if not is_owner:
         raise HTTPException(status_code=403, detail="This payment does not belong to you.")
 
     # Store gateway details if provided
