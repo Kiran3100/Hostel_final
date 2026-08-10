@@ -57,7 +57,8 @@ class Payment(BaseModel):
         try:
             if self.booking:
                 total_paid = sum(p.amount for p in self.booking.payments if p.status.lower() == 'captured')
-                return float(self.booking.grand_total) - float(total_paid)
+                balance = float(self.booking.grand_total) - float(total_paid)
+                return round(max(0.0, balance), 2)
         except Exception:
             pass
         return None
