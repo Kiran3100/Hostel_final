@@ -40,11 +40,11 @@ services:
       - key: ENCRYPTION_KEY
         sync: false
       - key: RAZORPAY_KEY_ID
-        sync: false
+        value: "rzp_live_T1totnHl5LEoTG"
       - key: RAZORPAY_KEY_SECRET
-        sync: false
+        value: "cWjz2stqI2MsZ3LPQydlZh6F"
       - key: RAZORPAY_WEBHOOK_SECRET
-        sync: false
+        value: "cWjz2stqI2MsZ3LPQydlZh6F"
       - key: TWO_FACTOR_API_KEY
         sync: false
 

@@ -47,9 +47,9 @@ class Settings(BaseSettings):
     refresh_cookie_path: str = "/"
     
     # Razorpay
-    razorpay_key_id: str = ""
-    razorpay_key_secret: str = ""
-    razorpay_webhook_secret: str = ""
+    razorpay_key_id: str = "rzp_live_T1totnHl5LEoTG"
+    razorpay_key_secret: str = "cWjz2stqI2MsZ3LPQydlZh6F"
+    razorpay_webhook_secret: str = "cWjz2stqI2MsZ3LPQydlZh6F"
 
     # Encryption key for storing sensitive values (Razorpay secrets) in the DB
     # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
